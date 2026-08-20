@@ -12,15 +12,24 @@
 
 import { createWorker, type Worker } from 'tesseract.js';
 import sharp from 'sharp';
+import { fileURLToPath } from 'node:url';
 
 const DEFAULT_LANGS = ['chi_sim+eng'] as const;
+
+/**
+ * Local tessdata directory shipped inside this plugin package. Keeping the
+ * language packs beside the plugin makes OCR fully offline — no CDN fetch
+ * at first use. tsdown bundles the server into `lib/index.js`, so the
+ * package root is one level up from the bundle.
+ */
+const LANG_PATH = fileURLToPath(new URL('../', import.meta.url));
 
 let cachedWorker: Worker | null = null;
 let cachedLangs: string | null = null;
 
 async function getWorker(langs: string): Promise<Worker> {
     if (cachedWorker && cachedLangs === langs) return cachedWorker;
-    const worker = await createWorker(langs);
+    const worker = await createWorker(langs, 1, { langPath: LANG_PATH });
     cachedWorker = worker;
     cachedLangs = langs;
     return worker;
