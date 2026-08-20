@@ -1,7 +1,7 @@
 {
   "name": "dsh-pseudo-vision",
-  "version": "0.2.0",
-  "description": "Wraps the official DeepSeek adapter so every model is advertised as image-capable, then converts image blocks into OCR + color-statistics + pixel-scan + metadata text at request time — a fixed reification of the pseudo-vision flow surfaced by @YinsenW on 2026-08-20.",
+  "version": "0.3.1",
+  "description": "Adds image-capable sibling routes for text-only providers on demand (off by default) and converts image blocks into local OCR, color-statistics, pixel-scan, and metadata evidence before delegating the text-only request.",
   "type": "module",
   "main": "./lib/index.js",
   "types": "./lib/index.d.ts",
@@ -28,8 +28,8 @@
   "scripts": {
     "build": "tsdown",
     "typecheck": "tsc --noEmit",
-    "test": "node --experimental-strip-types --test tests/*.test.ts",
-    "check": "pnpm typecheck && pnpm test && pnpm build",
+    "test": "pnpm build && node --experimental-strip-types --test tests/*.test.ts",
+    "check": "pnpm typecheck && pnpm test",
     "prepack": "pnpm build"
   },
   "keywords": [
