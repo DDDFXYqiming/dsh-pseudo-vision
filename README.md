@@ -2,13 +2,13 @@
 
 > 给 DeepSeek Harness 的 text-only provider 装上"工具层视觉"：把图片在落地到模型前，自动拆解成 OCR 文字 + 颜色统计 + 像素扫描 + 元信息，让任意纯文本模型也能"看图"。
 
-固定化 [@YinsenW\_](https://x.com/YinsenW_) 2026-08-20 扒出的 DeepSeek Harness rc.8 伪视觉流程。**实机验证通过**（2026-08-20，dsh 0.1.0-rc.8 / deepseek-v4-flash 实测：模型收到图片后正确读出 OCR 文字、颜色占比、图片尺寸并回答）。
+**实机验证通过**（dsh 0.1.0-rc.8 / deepseek-v4-flash 实测：模型收到图片后正确读出 OCR 文字、颜色占比、图片尺寸并回答）。
 
 ## 它在做什么
 
-Yinsen 的实验显示，当 `deepseek-v4-flash`（text-only）收到 read_image 失败错误时，会**自己**用 `bash` + Python 拼出 OCR + 像素分析 + 颜色统计 + 元信息这套工具链，把图片"硬拼"成结构化文本再喂回自己。
+当 `deepseek-v4-flash`（text-only）收到 `read_image` 失败错误时，可以用 `bash` + Python 拼出 OCR、像素分析、颜色统计和元信息，再把图片转换为结构化文本。
 
-**dsh-pseudo-vision 把这套涌现流程封装成插件的固定能力**：
+**dsh-pseudo-vision 将这套本地证据链封装为插件能力**：
 
 1. 通过 `cordis.patch.yml` 接管官方 `deepseek-official` 路由，保持现有 DeepSeek 行为
 2. 按 `bridgeProviders` 白名单（或显式 `bridgeOtherProviders`）为其他已注册 provider 生成兄弟路由，例如 `dsh-pseudo-vision/kimi-for-coding`、`dsh-pseudo-vision/openrouter`
@@ -35,6 +35,22 @@ Yinsen 的实验显示，当 `deepseek-v4-flash`（text-only）收到 read_image
   config:
     ocrBudget: auto       # auto | small | normal | large | mega
 ```
+
+### 原图证据与 OCR 预处理边界
+
+四项视觉证据不会共用被修改过的图片字节，处理分支如下：
+
+```text
+原图 bytes
+├─ vision_color_stats → 原图颜色占比
+├─ vision_pixel_scan  → 原图目标色/红色行
+├─ vision_meta        → 原图尺寸、格式与采样
+└─ vision_ocr         → OCR 专用副本（预算、灰度、反色、增强）
+```
+
+自动伪视觉桥接只对 OCR 副本执行缩放、灰度、反色、对比度、锐化和白边；颜色统计、像素扫描、元信息始终基于原图。直接调用 `vision_ocr` 工具时也读取原图字节。所有处理都在本机完成，不会把原图发送给外部视觉 API。
+
+`ocrNoResize: true` 的含义是跳过 OCR 分支的预算缩放和自适应放大，保留原图的几何尺寸；它**不是**完全关闭预处理，OCR 副本仍会增强并添加白边（最终副本会因此增加边框像素）。它也不影响另外三个工具读取原图。
 
 | 阶段 | 行为 |
 |---|---|
