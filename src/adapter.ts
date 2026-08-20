@@ -47,8 +47,64 @@ export interface PseudoVisionBridgeOptions {
 
 const IMAGE_INPUT = ["text", "image"] as const;
 
+/** Model-selector hint shown for every model served by the bridge. */
+export const PSEUDO_VISION_DESCRIPTION = "图片会在发送前由 dsh-pseudo-vision 转换为本地视觉文字";
+
 function withImageInput(model: LlmModelInfo): LlmModelInfo {
-    return { ...model, inputModalities: IMAGE_INPUT };
+    return {
+        ...model,
+        inputModalities: IMAGE_INPUT,
+        description: PSEUDO_VISION_DESCRIPTION,
+    };
+}
+
+/**
+ * Replace image blocks with local pseudo-vision evidence while preserving the
+ * caller's provider/model fields. Both the official DeepSeek bridge and the
+ * generic provider aliases use this exact request transformation.
+ */
+export async function buildPseudoVisionRequest(
+    options: GenerateOptions,
+    attachments: AttachmentStore,
+    bridgeOptions: PseudoVisionBridgeOptions,
+): Promise<GenerateOptions | undefined> {
+    const refs = collectImageRefs(options.messages);
+    if (refs.length === 0) return undefined;
+
+    if (refs.length > bridgeOptions.maxImages) {
+        throw new LlmError(
+            `本次请求包含 ${refs.length} 张图片，伪视觉桥接上限为 ${bridgeOptions.maxImages} 张`,
+            "PSEUDO_VISION_IMAGE_LIMIT",
+        );
+    }
+
+    const task = latestUserTask(options.messages, refs.length);
+    const resolved = await Promise.all(
+        refs.map((ref) => attachments.readImage(ref, options.signal)),
+    );
+
+    const observations: string[] = [];
+    for (let index = 0; index < resolved.length; index += 1) {
+        const image = toResolvedImage(resolved[index]);
+        const text = await imageToText(image, {
+            cacheDir: bridgeOptions.cacheDir,
+            bypassCache: bridgeOptions.bypassCache,
+        });
+        observations.push(
+            `===== 图片 ${index + 1}（${refs[index]?.mediaType}）=====\\n${text}`,
+        );
+    }
+
+    return {
+        ...options,
+        messages: withoutImages(options.messages, refs),
+        system: appendVisionContext(
+            options.system,
+            observations.join("\\n\\n"),
+            task,
+            refs.length,
+        ),
+    };
 }
 
 export class PseudoVisionBridgeAdapter extends LlmAdapter {
@@ -89,7 +145,11 @@ export class PseudoVisionBridgeAdapter extends LlmAdapter {
         signal?: AbortSignal,
     ): Promise<LlmResolvedModelInfo> {
         const resolved = await this.#deepseek.resolveModel(provider, model, signal);
-        return { ...resolved, inputModalities: IMAGE_INPUT };
+        return {
+            ...resolved,
+            inputModalities: IMAGE_INPUT,
+            description: PSEUDO_VISION_DESCRIPTION,
+        };
     }
 
     async *stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
@@ -110,40 +170,19 @@ export class PseudoVisionBridgeAdapter extends LlmAdapter {
             return;
         }
 
-        if (refs.length > this.#maxImages) {
-            throw new LlmError(
-                `本次请求包含 ${refs.length} 张图片，伪视觉桥接上限为 ${this.#maxImages} 张`,
-                "PSEUDO_VISION_IMAGE_LIMIT",
-            );
-        }
-
-        const task = latestUserTask(options.messages, refs.length);
-        const resolved = await Promise.all(
-            refs.map((ref) => this.#attachments.readImage(ref, options.signal)),
-        );
-
-        const observations: string[] = [];
-        for (let index = 0; index < resolved.length; index += 1) {
-            const image = toResolvedImage(resolved[index]);
-            const text = await imageToText(image, {
+        const delegated = await buildPseudoVisionRequest(
+            options,
+            this.#attachments,
+            {
                 cacheDir: this.#cacheDir,
                 bypassCache: this.#bypassCache,
-            });
-            observations.push(
-                `===== 图片 ${index + 1}（${refs[index]?.mediaType}）=====\n${text}`,
-            );
+                maxImages: this.#maxImages,
+            },
+        );
+        if (delegated === undefined) {
+            yield* this.#deepseek.stream(options);
+            return;
         }
-
-        const delegated: GenerateOptions = {
-            ...options,
-            messages: withoutImages(options.messages, refs),
-            system: appendVisionContext(
-                options.system,
-                observations.join("\n\n"),
-                task,
-                refs.length,
-            ),
-        };
         yield* this.#deepseek.stream(delegated);
     }
 }
