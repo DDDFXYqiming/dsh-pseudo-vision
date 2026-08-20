@@ -28,6 +28,9 @@ All notable changes to dsh-pseudo-vision are documented here.
   on first run (or ship them alongside the plugin).
 - Tests: 4/4 green (`node --experimental-strip-types --test tests/*.test.ts`);
   OCR smoke test is skipped when tessdata is not cached locally.
+- OCR downloads `chi_sim`+`eng` (.traineddata.gz) from the tesseract CDN on
+  first use into tesseract.js's built-in cache directory; subsequent runs
+  are fully offline.
 - Still no external vision API: everything runs in-process.
 
 ## [0.1.0] - 2026-08-20
