@@ -20,7 +20,11 @@ import type { Context } from "@deepseek-ai/cordis";
 import { getOrCreateAnonymousUserId } from "@deepseek-ai/dsh-anonymous-user-id";
 import type {} from "@deepseek-ai/dsh-attachment";
 import { launchEnvironmentOf } from "@deepseek-ai/dsh-launch-environment";
-import { assertUsableApiKey, LlmError } from "@deepseek-ai/dsh-llm";
+import {
+    assertUsableApiKey,
+    LlmError,
+    type AdapterRegistrationHandle,
+} from "@deepseek-ai/dsh-llm";
 import {
     Config as DeepSeekConfigSchema,
     DeepSeekAdapter,
@@ -44,6 +48,11 @@ declare module "@deepseek-ai/cordis" {
 }
 
 import { PseudoVisionBridgeAdapter } from "./adapter.js";
+import {
+    ProviderVisionBridgeAdapter,
+    genericProviderId,
+    isGenericProviderId,
+} from "./provider-bridge.js";
 import { computeColorStats, formatColorStatsBlock } from "./vision/color-stats.js";
 import { readMeta, formatMetaBlock } from "./vision/meta.js";
 import { runOcr, formatOcrBlock } from "./vision/ocr.js";
@@ -51,6 +60,13 @@ import { pixelScan, formatPixelScanBlock } from "./vision/pixel-scan.js";
 
 export const name = "dsh-pseudo-vision";
 export const inject = ["llm", "attachments", "tools"];
+
+export {
+    GENERIC_PROVIDER_PREFIX,
+    ProviderVisionBridgeAdapter,
+    genericProviderId,
+    isGenericProviderId,
+} from "./provider-bridge.js";
 
 const PROVIDER = "deepseek-official";
 const DEEPSEEK_NS = settingsNamespace("llm-deepseek");
@@ -66,6 +82,19 @@ export interface PseudoVisionConfig {
     langs?: string;
     /** Explicitly override the provider route this bridge serves. */
     provider?: string;
+    /**
+     * Register image-capable sibling routes for OTHER live providers. Off by
+     * default — each sibling route duplicates every model in the selector,
+     * so only enable it when you actually need cross-provider bridging.
+     */
+    bridgeOtherProviders?: boolean;
+    /**
+     * Explicit allowlist of provider ids to bridge (e.g. ["kimi-for-coding"]).
+     * Empty by default: no sibling routes are created for other providers.
+     */
+    bridgeProviders?: string[];
+    /** Provider ids that should not receive a pseudo-vision sibling route. */
+    excludeProviders?: string[];
 }
 
 export const PseudoVisionConfigSchema: z<PseudoVisionConfig> = z.object({
@@ -74,6 +103,9 @@ export const PseudoVisionConfigSchema: z<PseudoVisionConfig> = z.object({
     maxImages: z.number().step(1).min(1).max(32).default(8),
     langs: z.string().default("chi_sim+eng"),
     provider: z.string().default(PROVIDER),
+    bridgeOtherProviders: z.boolean().default(false),
+    bridgeProviders: z.array(z.string()).default([]),
+    excludeProviders: z.array(z.string()).default([]),
 });
 
 export const Config = z.intersect([
@@ -90,6 +122,9 @@ function deepseekPart(config: PseudoVisionConfig): DeepSeekConfig {
         maxImages: _maxImages,
         langs: _langs,
         provider: _provider,
+        bridgeOtherProviders: _bridgeOtherProviders,
+        bridgeProviders: _bridgeProviders,
+        excludeProviders: _excludeProviders,
         ...deepseek
     } = config;
     return deepseek as DeepSeekConfig;
@@ -102,7 +137,8 @@ export function apply(ctx: Context, config: PseudoVisionConfig): void {
     const maxImages = config.maxImages ?? 8;
     const langs = config.langs ?? "chi_sim+eng";
 
-    let currentDeepSeek: () => DeepSeekConfig = () => deepseekPart(config);
+    let currentConfig: () => PseudoVisionConfig = () => config;
+    let currentDeepSeek: () => DeepSeekConfig = () => deepseekPart(currentConfig());
     let lastRaw: DeepSeekConfig | undefined;
     let lastGood: DeepSeekConnectionOptions | undefined;
     const options = (): DeepSeekConnectionOptions => {
@@ -162,6 +198,78 @@ export function apply(ctx: Context, config: PseudoVisionConfig): void {
     }]);
     const registration = ctx.llm.registerAdapter([provider], bridge);
 
+    // DSH rejects images before the agent loop when a selected model is
+    // explicitly text-only. Give every other live provider a sibling route
+    // whose model metadata advertises image input, while leaving the original
+    // route and its adapter untouched.
+    const genericTargets = new Map<string, string>();
+    const genericBridge = new ProviderVisionBridgeAdapter(
+        ctx.llm,
+        ctx.attachments,
+        genericTargets,
+        { cacheDir, bypassCache, maxImages },
+    );
+    let genericRegistration: AdapterRegistrationHandle | undefined;
+    let genericRoutes: string[] = [];
+    let refreshingGenericRoutes = false;
+
+    const refreshGenericRoutes = (): void => {
+        if (refreshingGenericRoutes) return;
+        refreshingGenericRoutes = true;
+        const previousTargets = new Map(genericTargets);
+        try {
+            const current = currentConfig();
+            const excluded = new Set(current.excludeProviders ?? []);
+            const allow = new Set(current.bridgeProviders ?? []);
+            const all = current.bridgeOtherProviders === true;
+            if (!all && allow.size === 0) {
+                if (genericRoutes.length > 0 && genericRegistration !== undefined) {
+                    genericTargets.clear();
+                    genericRegistration.replace([]);
+                    genericRoutes = [];
+                }
+                return;
+            }
+            const live = ctx.llm.listProviders().filter((item) =>
+                item.id !== provider
+                && !isGenericProviderId(item.id)
+                && !excluded.has(item.id)
+                && (all || allow.has(item.id)),
+            );
+            const nextRoutes = live.map((item) => genericProviderId(item.id));
+            const unchanged = nextRoutes.length === genericRoutes.length
+                && nextRoutes.every((route, index) => route === genericRoutes[index]);
+            if (unchanged) return;
+
+            genericTargets.clear();
+            for (const item of live) genericTargets.set(genericProviderId(item.id), item.id);
+
+            if (genericRegistration === undefined) {
+                if (nextRoutes.length > 0) {
+                    genericRegistration = ctx.llm.registerAdapter(nextRoutes, genericBridge);
+                }
+            } else {
+                genericRegistration.replace(nextRoutes);
+            }
+            genericRoutes = nextRoutes;
+            if (nextRoutes.length > 0) {
+                ctx.logger.info(
+                    `[dsh-pseudo-vision] generic sibling routes: ${nextRoutes.join(", ")}`,
+                );
+            }
+        } catch (error) {
+            genericTargets.clear();
+            for (const [route, target] of previousTargets) genericTargets.set(route, target);
+            ctx.logger.warn("[dsh-pseudo-vision] unable to refresh generic sibling routes");
+            ctx.logger.warn(error);
+        } finally {
+            refreshingGenericRoutes = false;
+        }
+    };
+
+    ctx.on("llm/adapters-updated", refreshGenericRoutes, { global: true });
+    refreshGenericRoutes();
+
     let registeredPolicy = options().retryPolicy;
     const ensureRegistrationFacts = (): void => {
         const policy = options().retryPolicy;
@@ -176,13 +284,20 @@ export function apply(ctx: Context, config: PseudoVisionConfig): void {
             Config,
             { base: config },
         );
-        currentDeepSeek = () => deepseekPart(scope.get() as PseudoVisionConfig);
+        currentConfig = () => scope.get() as PseudoVisionConfig;
+        currentDeepSeek = () => deepseekPart(currentConfig());
         ensureRegistrationFacts();
-        scope.watch(ensureRegistrationFacts);
+        refreshGenericRoutes();
+        scope.watch(() => {
+            ensureRegistrationFacts();
+            refreshGenericRoutes();
+        });
         settingsCtx.effect(() => () => {
             if (ctx.fiber.state >= 5) return;
-            currentDeepSeek = () => deepseekPart(config);
+            currentConfig = () => config;
+            currentDeepSeek = () => deepseekPart(currentConfig());
             ensureRegistrationFacts();
+            refreshGenericRoutes();
         });
     });
 
