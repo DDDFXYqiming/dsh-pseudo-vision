@@ -1,3 +1,5 @@
-insert:
-  - id: dsh-pseudo-vision
-    name: dsh-pseudo-vision
+- id: llm-deepseek
+  disabled: true
+- insert:
+    - id: dsh-pseudo-vision
+      name: "dsh-pseudo-vision"

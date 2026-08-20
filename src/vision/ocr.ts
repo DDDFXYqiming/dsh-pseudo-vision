@@ -11,6 +11,7 @@
  */
 
 import { createWorker, type Worker } from 'tesseract.js';
+import sharp from 'sharp';
 
 const DEFAULT_LANGS = ['chi_sim+eng'] as const;
 
@@ -52,8 +53,9 @@ export async function runOcr(
     const worker = await getWorker(langs);
     const { data } = await worker.recognize(imageBytes);
 
-    const width = data.image.width || 1;
-    const height = data.image.height || 1;
+    const meta = await sharp(imageBytes).metadata();
+    const width = meta.width || 1;
+    const height = meta.height || 1;
 
     const lines: OcrLine[] = (data.blocks ?? [])
         .flatMap((block) => block.paragraphs ?? [])

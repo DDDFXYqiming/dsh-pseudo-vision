@@ -1,15 +1,19 @@
 {
   "name": "dsh-pseudo-vision",
-  "version": "0.1.0",
-  "description": "Tools and a request-time image→text bridge that lets text-only DSH models \"see\" via OCR, color statistics, pixel scanning, and image metadata. Reifies the pseudo-vision flow surfaced by @YinsenW on 2026-08-20.",
+  "version": "0.2.0",
+  "description": "Wraps the official DeepSeek adapter so every model is advertised as image-capable, then converts image blocks into OCR + color-statistics + pixel-scan + metadata text at request time — a fixed reification of the pseudo-vision flow surfaced by @YinsenW on 2026-08-20.",
   "type": "module",
-  "main": "lib/index.js",
-  "types": "lib/index.d.ts",
+  "main": "./lib/index.js",
+  "types": "./lib/index.d.ts",
   "exports": {
     ".": {
       "types": "./lib/index.d.ts",
       "import": "./lib/index.js"
-    }
+    },
+    "./client": {
+      "default": "./lib/client.js"
+    },
+    "./package.json": "./package.json"
   },
   "files": [
     "lib",
@@ -17,18 +21,23 @@
     "README.md",
     "SKILL.md",
     "CHANGELOG.md",
-    "LICENSE"
+    "LICENSE",
+    "assets/readme"
   ],
+  "sideEffects": false,
   "scripts": {
     "build": "tsdown",
-    "check": "tsc --noEmit",
-    "test": "node --test tests/"
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "check": "pnpm typecheck && pnpm test && pnpm build",
+    "prepack": "pnpm build"
   },
   "keywords": [
     "dsh",
     "dsh-plugin",
     "deepseek-harness",
     "vision",
+    "multimodal",
     "ocr",
     "text-only",
     "pseudo-vision",
@@ -36,31 +45,73 @@
   ],
   "license": "MIT",
   "engines": {
-    "node": ">=22.19.0"
+    "node": ">=22.19"
+  },
+  "packageManager": "pnpm@10.33.4",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "sharp",
+      "tesseract.js"
+    ]
   },
   "dependencies": {
-    "tesseract.js": "^5.1.1",
-    "sharp": "^0.33.5"
+    "@deepseek-ai/schemastery": "3.18.1",
+    "sharp": "^0.33.5",
+    "tesseract.js": "^5.1.1"
   },
   "devDependencies": {
-    "@types/node": "^22.10.5",
-    "tsdown": "^0.6.10",
-    "typescript": "^5.7.3"
+    "@deepseek-ai/cordis": "4.0.1",
+    "@deepseek-ai/dsh-anonymous-user-id": "0.1.0-rc.8",
+    "@deepseek-ai/dsh-api-remotes": "0.1.0-rc.8",
+    "@deepseek-ai/dsh-attachment": "0.1.0-rc.8",
+    "@deepseek-ai/dsh-client-connection": "0.1.0-rc.8",
+    "@deepseek-ai/dsh-client-locale": "0.1.0-rc.8",
+    "@deepseek-ai/dsh-client-runtime": "0.1.0-rc.8",
+    "@deepseek-ai/dsh-client-ui-settings": "0.1.0-rc.8",
+    "@deepseek-ai/dsh-client-ui-settings-plugins": "0.1.0-rc.8",
+    "@deepseek-ai/dsh-client-ui-slots": "0.1.0-rc.7",
+    "@deepseek-ai/dsh-credentials": "0.1.0-rc.8",
+    "@deepseek-ai/dsh-launch-environment": "0.1.0-rc.8",
+    "@deepseek-ai/dsh-llm": "0.1.0-rc.8",
+    "@deepseek-ai/dsh-llm-deepseek": "0.1.0-rc.8",
+    "@deepseek-ai/dsh-settings": "0.1.0-rc.8",
+    "@types/node": "^24.0.0",
+    "@types/react": "~18.3.1",
+    "react": "^18.2.0",
+    "tsdown": "^0.22.14",
+    "typescript": "^5.9.3"
   },
   "peerDependencies": {
-    "@deepseek-ai/dsh": ">=0.1.0-rc.7 <0.1.0-rc.9"
+    "@deepseek-ai/cordis": "4.0.1",
+    "@deepseek-ai/dsh-anonymous-user-id": "0.1.0-rc.7 || 0.1.0-rc.8",
+    "@deepseek-ai/dsh-api-remotes": "0.1.0-rc.7 || 0.1.0-rc.8",
+    "@deepseek-ai/dsh-attachment": "0.1.0-rc.7 || 0.1.0-rc.8",
+    "@deepseek-ai/dsh-client-connection": "0.1.0-rc.7 || 0.1.0-rc.8",
+    "@deepseek-ai/dsh-client-locale": "0.1.0-rc.7 || 0.1.0-rc.8",
+    "@deepseek-ai/dsh-client-runtime": "0.1.0-rc.7 || 0.1.0-rc.8",
+    "@deepseek-ai/dsh-client-ui-settings": "0.1.0-rc.7 || 0.1.0-rc.8",
+    "@deepseek-ai/dsh-client-ui-settings-plugins": "0.1.0-rc.7 || 0.1.0-rc.8",
+    "@deepseek-ai/dsh-client-ui-slots": "0.1.0-rc.7 || 0.1.0-rc.8",
+    "@deepseek-ai/dsh-credentials": "0.1.0-rc.7 || 0.1.0-rc.8",
+    "@deepseek-ai/dsh-launch-environment": "0.1.0-rc.7 || 0.1.0-rc.8",
+    "@deepseek-ai/dsh-llm": "0.1.0-rc.7 || 0.1.0-rc.8",
+    "@deepseek-ai/dsh-llm-deepseek": "0.1.0-rc.7 || 0.1.0-rc.8",
+    "@deepseek-ai/dsh-settings": "0.1.0-rc.7 || 0.1.0-rc.8",
+    "react": "^18.2.0"
   },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
     },
-    "injects": [
-      "llm",
-      "agent"
-    ],
-    "external": [
-      "tesseract.js",
-      "sharp"
-    ]
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-settings-plugins"
+      ]
+    }
   }
 }
