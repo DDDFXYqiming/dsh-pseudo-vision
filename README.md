@@ -1,6 +1,6 @@
 # dsh-pseudo-vision
 
-> 给 text-only DeepSeek Harness 模型装上"工具层视觉"：把图片在落地到模型前，自动拆解成 OCR 文字 + 颜色统计 + 像素扫描 + 元信息，让纯文本模型也能"看图"。
+> 给 DeepSeek Harness 的 text-only provider 装上"工具层视觉"：把图片在落地到模型前，自动拆解成 OCR 文字 + 颜色统计 + 像素扫描 + 元信息，让任意纯文本模型也能"看图"。
 
 固定化 [@YinsenW\_](https://x.com/YinsenW_) 2026-08-20 扒出的 DeepSeek Harness rc.8 伪视觉流程。**实机验证通过**（2026-08-20，dsh 0.1.0-rc.8 / deepseek-v4-flash 实测：模型收到图片后正确读出 OCR 文字、颜色占比、图片尺寸并回答）。
 
@@ -10,12 +10,12 @@ Yinsen 的实验显示，当 `deepseek-v4-flash`（text-only）收到 read_image
 
 **dsh-pseudo-vision 把这套涌现流程封装成插件的固定能力**：
 
-1. 通过 `cordis.patch.yml` 禁用官方 `llm-deepseek` 适配器
-2. 插件重新注册 `deepseek-official` provider，用 `PseudoVisionBridgeAdapter` 包装官方 DeepSeekAdapter
-3. **自动标识为识图**：`resolveModel` / `listModels` 强制声明 `inputModalities: ["text", "image"]` —— 模型选择器和 api-proxy 门禁都放行，**无需手动配置**
-4. **请求时伪视觉**：`stream()` 检测 image block → 若底层模型真实支持图片则原生透传；否则读附件 → 本地 4 工具转文本 → 替换 image block + 注入 `<pseudo-vision-context>` 到系统提示词
+1. 通过 `cordis.patch.yml` 接管官方 `deepseek-official` 路由，保持现有 DeepSeek 行为
+2. 为其他已注册 provider 自动生成兄弟路由，例如 `dsh-pseudo-vision/kimi-for-coding`、`dsh-pseudo-vision/openrouter`
+3. **自动标识为识图**：兄弟路由的 `resolveModel` / `listModels` 强制声明 `inputModalities: ["text", "image"]`，先通过 DSH 的图片 admission 门
+4. **请求时伪视觉**：原生视觉模型原样透传；text-only 模型读附件 → 本地 4 工具转文本 → 替换 image block + 注入 `<pseudo-vision-context>`，再委托回原 provider
 
-**全程本机执行，无外部视觉 API**。底层 HTTP 请求只含文本，text-only 网关不会 400。
+**全程本机执行，无外部视觉 API**。原始 provider 的 HTTP 请求只含文本，text-only 网关不会 400；原始 provider 路由本身不被修改。
 
 ## 提供的能力
 
@@ -44,7 +44,23 @@ dsh plugin --profile web add github:DDDFXYqiming/dsh-pseudo-vision
 
 ## 使用
 
-**装上即生效**，无需任何配置。`deepseek-official` 路由下所有模型自动声明为支持图片；text-only 模型收到图片时自动走伪视觉转换。
+**装上即生效**，无需额外配置。`deepseek-official` 路由继续自动支持图片。
+
+**其他 provider 默认不生成兄弟路由**（避免模型选择器出现大量重复条目）。只有当你确实需要在某个 text-only provider 上收图时，才在 profile patch 中显式开启白名单：
+
+```yaml
+- id: dsh-pseudo-vision
+  config:
+    bridgeProviders: ["kimi-for-coding"]   # 只给这个 provider 生成兄弟路由
+```
+
+或一次性桥接除 `excludeProviders` 外的所有 provider（谨慎：每个模型都会在模型选择器里多出一份 `· Pseudo Vision` 条目）：
+
+```yaml
+    bridgeOtherProviders: true
+```
+
+开启后，模型选择器会出现 `dsh-pseudo-vision/<provider>`（显示为 `· Pseudo Vision`）兄弟路由；选择它，text-only 模型会自动走本地伪视觉转换，原生视觉模型保持原生透传。
 
 **效果示例**（deepseek-v4-flash 实测收到的伪视觉证据）：
 
@@ -70,12 +86,13 @@ OCR 文本：23 行（"了解 deepseek harness 的 dsh 安装"等）
 - 读取工作区内的图片附件
 - 写入临时缓存到 `~/.dsh/profiles/<profile>/.dsh-pseudo-vision/cache/`
 - 进程内 tesseract.js OCR + sharp（首次运行从 tesseract CDN 下载语言包到内置缓存，之后离线）
-- **接管 `deepseek-official` provider**（这是插件工作的方式：禁用官方 llm-deepseek，由插件重新注册）
+- 接管 `deepseek-official` provider（禁用官方 llm-deepseek，由插件重新注册）
+- 按配置（`bridgeProviders` 白名单 / `bridgeOtherProviders` 全开）为指定 provider 注册兄弟路由；兄弟 adapter 通过公开的 `ctx.llm` API 委托原始 provider。**默认不注册任何其他 provider 的兄弟路由**
 
 **不**会：
 - 上传任何图片到外部 API
 - 修改 dsh 核心代码（纯 cordis patch + adapter 包装）
-- 影响 `llm-pi-ai` 下的其他 provider（kimi-for-coding、MiniMax M3、GLM、Qwen 等原样运行）
+- 覆盖或替换原始 provider adapter；原路由仍按原逻辑运行
 
 ## 已知边界
 
@@ -84,13 +101,15 @@ OCR 文本：23 行（"了解 deepseek harness 的 dsh 安装"等）
 - 颜色统计只给占比，无法还原布局/图标细节
 - 大图：自动降采样后再分析
 
-## ⚠️ 未完成 / 路线图
+## ⚠️ 已知边界 / 路线图
 
-当前版本（v0.2.0）**只接管 `deepseek-official` 这一个 provider**。以下为已知未完成项：
+当前版本（v0.3.1）已支持通过兄弟路由桥接其他 live provider，但**默认关闭**（`bridgeProviders` 白名单开启），且需要用户在模型选择器中选择带 `· Pseudo Vision` 标记的路由；原始 provider 不会被隐式改写。
 
-| 项 | 状态 | 计划 |
+| 项 | 状态 | 说明 |
 |---|---|---|
-| **其他 text-only 模型支持**（`llm-pi-ai` 下的 GLM / Qwen / Kimi 纯文本变体等） | ❌ 未实现 | v0.3.0：用 `agent/pre-step` waterfall 做通用图片→文本拦截（已验证该钩子支持替换消息批次），不碰任何 adapter；需与 deepseek adapter 方案协调避免重复转换 |
+| **其他 text-only 模型支持**（`llm-pi-ai` 下的 GLM / Qwen / Kimi / OpenRouter 等） | ✅ 已实现（默认关闭） | 通过 `bridgeProviders` 白名单或 `bridgeOtherProviders` 开启；开启后注册 `dsh-pseudo-vision/<provider>` 兄弟路由，原始路由保持不变 |
+| **外部 Vision Backend**（Qwen-VL / Gemini / OpenAI-compatible） | ❌ 未实现 | 当前版本坚持本地 OCR/颜色/像素/元信息；后续可增加显式 opt-in 的外部视觉后端 |
+| **自动切换兄弟路由** | ⚠️ 未实现 | 当前需在模型选择器手动选择 `· Pseudo Vision` 路由，避免污染原始会话模型选择 |
 | **npm 发布** | ❌ 未发布 | 发布为 `dsh-pseudo-vision` npm 包，支持 `dsh plugin add` 一行安装 |
 | **client 端增强** | ⚠️ 基础版 | 已有 settings 插件卡片；自动 composer 图片提示未做 |
 | **多语言 OCR 配置** | ✅ 已支持 | `langs` 配置项（默认 `chi_sim+eng`） |

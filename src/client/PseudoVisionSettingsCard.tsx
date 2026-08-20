@@ -61,7 +61,9 @@ export function PseudoVisionSettingsCard(_props: CardProps): JSX.Element {
         </span>
       </h4>
       <p>
-        所有 <code>deepseek-official</code> 路由下的模型都被声明为支持图片输入；
+        <code>deepseek-official</code> 路由声明支持图片；
+        其他 provider 仅在配置 <code>bridgeProviders</code> 白名单后生成
+        <code>dsh-pseudo-vision/&lt;provider&gt;</code> 兄弟路由（默认关闭）。
         当模型本身不支持图片时，图片会在请求前被本地转换为：
       </p>
       <ul>
@@ -73,6 +75,7 @@ export function PseudoVisionSettingsCard(_props: CardProps): JSX.Element {
       <p>
         转换结果以 <code>&lt;pseudo-vision-context&gt;</code> 注入系统提示词，
         图片字节不会进入纯文本模型的请求。整个过程在本机完成，无外部 API。
+        已开启的兄弟路由在模型选择器中显示为 <code>· Pseudo Vision</code>。
       </p>
     </div>
   );

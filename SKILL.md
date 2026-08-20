@@ -41,7 +41,7 @@ OCR 文字提取：
 
 ## How to invoke
 
-**自动触发**：默认装上后对 `deepseek-official` 路由下所有 text-only 模型生效（插件通过 cordis patch 接管该 provider）。
+**自动触发**：`deepseek-official` 路由自动生效；其他 provider 需在配置中显式开启（`bridgeProviders: ["<provider-id>"]` 白名单）后，使用自动生成的 `dsh-pseudo-vision/<provider>` 兄弟路由。**默认不为其他 provider 注册兄弟路由**。原生视觉模型透传，text-only 模型走本地转换。
 
 **手动触发**：在用户消息前加 `[pseudo-vision]`，强制走转换。
 
