@@ -11,7 +11,7 @@ Yinsen 的实验显示，当 `deepseek-v4-flash`（text-only）收到 read_image
 **dsh-pseudo-vision 把这套涌现流程封装成插件的固定能力**：
 
 1. 通过 `cordis.patch.yml` 接管官方 `deepseek-official` 路由，保持现有 DeepSeek 行为
-2. 为其他已注册 provider 自动生成兄弟路由，例如 `dsh-pseudo-vision/kimi-for-coding`、`dsh-pseudo-vision/openrouter`
+2. 按 `bridgeProviders` 白名单（或显式 `bridgeOtherProviders`）为其他已注册 provider 生成兄弟路由，例如 `dsh-pseudo-vision/kimi-for-coding`、`dsh-pseudo-vision/openrouter`
 3. **自动标识为识图**：兄弟路由的 `resolveModel` / `listModels` 强制声明 `inputModalities: ["text", "image"]`，先通过 DSH 的图片 admission 门
 4. **请求时伪视觉**：原生视觉模型原样透传；text-only 模型读附件 → 本地 4 工具转文本 → 替换 image block + 注入 `<pseudo-vision-context>`，再委托回原 provider
 
@@ -25,6 +25,28 @@ Yinsen 的实验显示，当 `deepseek-v4-flash`（text-only）收到 read_image
 | `vision_color_stats` | 像素占比分析（白/黑/灰/红/绿/蓝等） | sharp + 直方图统计 |
 | `vision_pixel_scan` | 逐行检测目标色像素密度 | sharp raw pixel access |
 | `vision_meta` | 尺寸、格式、色彩空间、四角/中心颜色采样 | sharp metadata |
+
+## OCR 优化管线（v0.4.0）
+
+图片证据仍然全部在本机生成；OCR 现在不再固定压到 512px，而是按预算走一条可追溯的预处理管线：
+
+```yaml
+- id: dsh-pseudo-vision
+  config:
+    ocrBudget: auto       # auto | small | normal | large | mega
+```
+
+| 阶段 | 行为 |
+|---|---|
+| 预算与吸附 | `small=512²`、`normal=1024²`、`large=1448²`、`mega=4096²`；按 Qwen 风格 `minPixels/maxPixels + 28` 倍数网格吸附 |
+| `auto` | 常规图使用 `normal`；超过约 210 万像素使用 `large`；小图会先放大到 OCR 友好的尺寸 |
+| 小字放大 | OCR 前对小输入用 Lanczos 放大（不超过该预算的最长边上限） |
+| 深色与低对比度 | 自动依据原图颜色统计判断暗底，反色后执行灰度、对比度拉伸、轻锐化，并给贴边文字补白边 |
+| 超长截图 | 原图高度超过 3000px 时先按原图切成 2000px 高、100px 重叠的块，再对每块独立预算预处理和 OCR，输出 `[第 i/N 块，y=...]` 边界 |
+| 低置信度复核 | Tesseract 置信度低于 60 的最多 3 行会裁剪、补边、2× 放大后复核；红色行像素扫描命中时扩大该复核区域 |
+| 缓存隔离 | 缓存键包含 `sha256 + 解析后的 budget + langs/resize 开关 + OCR 管线参数版本`；旧缓存文件保留，不会与新管线串结果 |
+
+`auto` 适合默认使用；密集表格、细小字体或文档可显式选择 `large`/`mega`，只想限制本地 CPU/内存时选择 `small`。需要保留 OCR 原图尺寸时设 `ocrNoResize: true`（仍会执行灰度/对比度/锐化/白边增强）。颜色统计、像素扫描、元信息始终读取原图，不会因为 OCR 预处理而改变模型看到的颜色证据。`bypassCache: true` 可强制重算。
 
 ## 安装
 
@@ -52,6 +74,8 @@ dsh plugin --profile web add github:DDDFXYqiming/dsh-pseudo-vision
 - id: dsh-pseudo-vision
   config:
     bridgeProviders: ["kimi-for-coding"]   # 只给这个 provider 生成兄弟路由
+    ocrBudget: auto                        # 也可 small/normal/large/mega
+    ocrNoResize: false                     # true：跳过预算缩放/放大
 ```
 
 或一次性桥接除 `excludeProviders` 外的所有 provider（谨慎：每个模型都会在模型选择器里多出一份 `· Pseudo Vision` 条目）：
@@ -65,8 +89,10 @@ dsh plugin --profile web add github:DDDFXYqiming/dsh-pseudo-vision
 **效果示例**（deepseek-v4-flash 实测收到的伪视觉证据）：
 
 ```
-元信息：sha256=46997842de08, image/png, 217068B, 尺寸 1919×1019
+[dsh-pseudo-vision] sha256=46997842de08 budget=normal 原图:image/png 217068B 预处理:灰度 1392×776
 OCR 文本：23 行（"了解 deepseek harness 的 dsh 安装"等）
+OCR 低置信度重试：1 个区域（2× 局部复核）
+元信息：image/png, 217068B, 原图尺寸 1919×1019
 颜色统计：白色 94.1%、灰色 5.1%、其他 0.6%  → 推断浅色 UI
 像素扫描：无红色高密度行
 ```
@@ -84,7 +110,7 @@ OCR 文本：23 行（"了解 deepseek harness 的 dsh 安装"等）
 ## 权限
 
 - 读取工作区内的图片附件
-- 写入临时缓存到 `~/.dsh/profiles/<profile>/.dsh-pseudo-vision/cache/`
+- 写入临时缓存到 `~/.dsh/profiles/<profile>/.dsh-pseudo-vision/cache/`（键含 sha256、budget、langs/resize 开关、OCR 管线参数版本）
 - 进程内 tesseract.js OCR + sharp（首次运行从 tesseract CDN 下载语言包到内置缓存，之后离线）
 - 接管 `deepseek-official` provider（禁用官方 llm-deepseek，由插件重新注册）
 - 按配置（`bridgeProviders` 白名单 / `bridgeOtherProviders` 全开）为指定 provider 注册兄弟路由；兄弟 adapter 通过公开的 `ctx.llm` API 委托原始 provider。**默认不注册任何其他 provider 的兄弟路由**
@@ -99,11 +125,12 @@ OCR 文本：23 行（"了解 deepseek harness 的 dsh 安装"等）
 - 复杂空间关系、真实照片：描述精度有限（与 Yinsen 实验一致）
 - OCR 可能认错字（例如把 "DeepSeek" 识别成 "Deepseck"），影响理解
 - 颜色统计只给占比，无法还原布局/图标细节
-- 大图：自动降采样后再分析
+- 大图：OCR 按 `ocrBudget` 预算处理；超长截图会先按原图切块，颜色/像素/元信息仍基于原图
+- OCR 低置信度复核最多 3 个区域；它提升小字可读性，但不等同于真正的图像超分辨率
 
 ## ⚠️ 已知边界 / 路线图
 
-当前版本（v0.3.1）已支持通过兄弟路由桥接其他 live provider，但**默认关闭**（`bridgeProviders` 白名单开启），且需要用户在模型选择器中选择带 `· Pseudo Vision` 标记的路由；原始 provider 不会被隐式改写。
+当前版本（v0.4.0）已支持通过兄弟路由桥接其他 live provider，并新增可配置 OCR 预算、长截图分块、暗色/低对比度增强、低置信度局部复核与参数隔离缓存；跨 provider 仍**默认关闭**（`bridgeProviders` 白名单开启），且需要用户在模型选择器中选择带 `· Pseudo Vision` 标记的路由；原始 provider 不会被隐式改写。
 
 | 项 | 状态 | 说明 |
 |---|---|---|
@@ -113,8 +140,10 @@ OCR 文本：23 行（"了解 deepseek harness 的 dsh 安装"等）
 | **npm 发布** | ❌ 未发布 | 发布为 `dsh-pseudo-vision` npm 包，支持 `dsh plugin add` 一行安装 |
 | **client 端增强** | ⚠️ 基础版 | 已有 settings 插件卡片；自动 composer 图片提示未做 |
 | **多语言 OCR 配置** | ✅ 已支持 | `langs` 配置项（默认 `chi_sim+eng`） |
-| **图像预缩放策略** | ⚠️ 固定 | 目前固定降采样 512px 分析；可配置化未做 |
-| **缓存失效/手动刷新** | ⚠️ 部分 | sha256 内容寻址缓存；`bypassCache` 配置项可强制重算 |
+| **图像预缩放策略** | ✅ 已实现 | `ocrBudget` + smart resize + 小字自适应放大；`auto` 按原图像素数选择 normal/large |
+| **长截图 OCR** | ✅ 已实现 | 原图高度 > 3000px 时 2000px 分块、100px 重叠，块级预算预处理并合并边界 |
+| **预处理与局部复核** | ✅ 已实现 | 暗色反色、灰度/对比度/锐化、白边、低置信度最多 3 区域 2× 重试 |
+| **缓存失效/手动刷新** | ✅ 已实现 | sha256 + budget + 管线参数版本内容寻址缓存；`bypassCache` 强制重算 |
 
 ## 关联项目
 

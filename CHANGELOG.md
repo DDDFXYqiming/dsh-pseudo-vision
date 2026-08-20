@@ -2,6 +2,28 @@
 
 All notable changes to dsh-pseudo-vision are documented here.
 
+## [0.4.0] - 2026-08-21
+
+### Added
+- **Configurable OCR budgets**: `ocrBudget: auto | small | normal | large | mega`; `auto` selects a budget from the original pixel count and Qwen-style smart resize snaps dimensions to a 28px grid. `ocrNoResize: true` preserves the original OCR dimensions.
+- **Adaptive small-text upscale**: low-resolution inputs are Lanczos-upscaled before OCR without exceeding the selected budget's longest-side cap.
+- **Long-screenshot OCR**: original images taller than 3000px are cropped into 2000px blocks with 100px overlap before per-block preprocessing/OCR; merged output carries block boundaries.
+- **Local OCR enhancement**: dark-mode detection/inversion, greyscale, contrast normalization, light sharpening, and a white border for edge-touching text.
+- **Low-confidence local retry**: up to three Tesseract lines below confidence 60 are padded, enlarged 2×, and recognized again; pixel-scan focus rows guide the crop.
+- **Pipeline-aware cache keys**: sha256, resolved budget, langs/resize flags, and the full OCR pipeline version are included in cache names, so old fixed-pipeline results cannot cross-contaminate new settings.
+
+### Changed
+- Colour statistics, pixel scanning, and metadata continue to use original bytes; only OCR uses the preprocessed copy.
+- DeepSeek and allowlisted provider bridge routes now pass the OCR budget consistently.
+- Settings card, README, and SKILL document the new local-only pipeline and its CPU/memory trade-offs.
+- OCR workers are disposed with the plugin fiber, and tool renderers return standard text content blocks for DSH CLI/tool-call compatibility.
+
+### Verification
+- Windows Node `tsdown` build and `tsc --noEmit` pass.
+- Windows Node test suite: 15/15 pass; tessdata-dependent OCR smoke remains conditionally skipped when language data is not cached.
+- CLI smoke checks passed through the built bridge: English OCR, 900×700 metadata, red-row pixel density, dark-mode inversion, and 4-block long-screenshot OCR.
+- DSH headless CLI self-test passed all four registered tools on the local fixture; no external vision API was used.
+
 ## [0.3.1] - 2026-08-20
 
 ### Changed (fixes UX regression from 0.3.0)

@@ -72,6 +72,17 @@ export function PseudoVisionSettingsCard(_props: CardProps): JSX.Element {
         <li><code>vision_pixel_scan</code> — 像素行扫描（sharp）</li>
         <li><code>vision_meta</code> — 元信息 + 角/中心采样（sharp）</li>
       </ul>
+      <p style={{ fontSize: "12px", color: "#888", marginTop: "4px" }}>
+        OCR 预算：<code>ocrBudget</code> 默认 <code>auto</code>，可选
+        <code>small</code>/<code>normal</code>/<code>large</code>/<code>mega</code>；
+        需要原图尺寸时可设 <code>ocrNoResize: true</code>。
+      </p>
+      <ul>
+        <li>小字自适应 Lanczos 放大；暗色模式反色、灰度、对比度拉伸、锐化、白边</li>
+        <li>超长截图按 2000px 块、100px 重叠处理，并保留块边界</li>
+        <li>低置信度最多 3 个区域自动裁剪并 2× 复核</li>
+        <li>缓存键隔离预算和完整 OCR 管线参数；颜色/像素/元信息仍读取原图</li>
+      </ul>
       <p>
         转换结果以 <code>&lt;pseudo-vision-context&gt;</code> 注入系统提示词，
         图片字节不会进入纯文本模型的请求。整个过程在本机完成，无外部 API。
