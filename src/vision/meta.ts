@@ -1,7 +1,7 @@
 /**
  * Image metadata + four-corner / centre sampling via sharp.
  *
- * Implements the "图片元信息" step Yinsen surfaced: report width × height,
+ * Implements the "图片元信息" step of the local evidence pipeline: report width × height,
  * media type, colour space, and the dominant colour at the four corners and
  * the centre. The model uses corners to infer layout (e.g. white TL/TR/BL/BR
  * ⇒ "白底") and the centre to anchor "where the main subject is".
@@ -102,7 +102,7 @@ export async function readMeta(imageBytes: Buffer): Promise<MetaResult> {
 }
 
 /**
- * Format meta + samples as the model-facing block. Mirrors Yinsen's
+ * Format meta + samples as the model-facing evidence block.
  * "图片元信息" rows.
  */
 export function formatMetaBlock(result: MetaResult): string {

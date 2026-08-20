@@ -1,7 +1,7 @@
 /**
  * Pixel-ratio colour statistics via sharp.
  *
- * Implements the "颜色统计" step Yinsen surfaced: bucket every pixel into
+ * Implements the "颜色统计" step of the local evidence pipeline: bucket every pixel into
  * coarse colour categories (white / black / grey / red / green / blue /
  * yellow / cyan / magenta / other) and emit the share each bucket owns.
  *
@@ -103,7 +103,7 @@ export async function computeColorStats(imageBytes: Buffer): Promise<ColorStats>
 
 /**
  * Format colour stats as the model-facing block. Mirrors the
- * "颜色统计" step Yinsen surfaced.
+ * "颜色统计" evidence step.
  */
 export function formatColorStatsBlock(stats: ColorStats): string {
     const significant = stats.buckets.filter((b) => b.share >= 0.005);

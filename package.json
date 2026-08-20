@@ -40,8 +40,7 @@
     "multimodal",
     "ocr",
     "text-only",
-    "pseudo-vision",
-    "yinsen"
+    "pseudo-vision"
   ],
   "license": "MIT",
   "engines": {

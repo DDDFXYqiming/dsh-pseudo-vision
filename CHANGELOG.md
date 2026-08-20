@@ -87,4 +87,3 @@ All notable changes to dsh-pseudo-vision are documented here.
 ### Notes
 - This plugin does NOT modify dsh core code; it relies on cordis hooks and the dsh llm service surface.
 - Compatible with dsh `0.1.0-rc.7` and `0.1.0-rc.8`.
-- Inspired by the pseudo-vision flow exposed by [@YinsenW\_](https://x.com/YinsenW_) on 2026-08-20.

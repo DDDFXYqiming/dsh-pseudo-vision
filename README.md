@@ -138,7 +138,7 @@ OCR 低置信度重试：1 个区域（2× 局部复核）
 
 ## 已知边界
 
-- 复杂空间关系、真实照片：描述精度有限（与 Yinsen 实验一致）
+- 复杂空间关系、真实照片：描述精度有限，伪视觉证据不等同于真实多模态理解
 - OCR 可能认错字（例如把 "DeepSeek" 识别成 "Deepseck"），影响理解
 - 颜色统计只给占比，无法还原布局/图标细节
 - 大图：OCR 按 `ocrBudget` 预算处理；超长截图会先按原图切块，颜色/像素/元信息仍基于原图
@@ -164,7 +164,6 @@ OCR 低置信度重试：1 个区域（2× 局部复核）
 ## 关联项目
 
 - `dsh-vision-skill`（同一作者，已弃用）：早期 paste-to-path 方案
-- [Yinsen 原帖](https://x.com/YinsenW_/status/...)
 - [oil-oil/dsh-vision](https://github.com/oil-oil/dsh-vision)：本插件架构参考（adapter 替换思路），但使用外部视觉 API 而非本地工具
 
 ## License

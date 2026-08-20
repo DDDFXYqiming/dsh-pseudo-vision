@@ -4,7 +4,7 @@
  * When a turn carries an `image` block AND the routed model does not declare
  * image input, swap that block for a structured text block built from the
  * four vision tools (ocr / color-stats / pixel-scan / meta). This is the
- * exact pipeline Yinsen observed the text-only DeepSeek model reconstructing
+ * exact local evidence pipeline used to make text-only DeepSeek models process images
  * by hand with bash + Python; here it is fixed and reproducible.
  *
  * The bridge never modifies image bytes; the model still receives pure text.

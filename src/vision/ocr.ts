@@ -2,7 +2,7 @@
  * OCR via tesseract.js.
  *
  * Why tesseract.js: pure JS, no native binary, runs in-process inside the
- * DSH Node worker. Same engine Yinsen's "OCR 文字提取" step leans on.
+ * DSH Node worker. The same local engine powers the OCR evidence block.
  *
  * Output: an array of lines, each with a normalised bounding box
  * (x1, y1, x2, y2 in [0,1]) and the recognised text. Normalised coordinates
@@ -122,7 +122,7 @@ export async function runOcr(
 
 /**
  * Format OCR result as the block we inject into the prompt. Mirrors the
- * Yinsen screenshot's "OCR 文字提取" step so users can compare visually.
+ * screenshot OCR evidence so users can compare the result visually.
  */
 export function formatOcrBlock(result: OcrResult): string {
     if (result.lines.length === 0) {

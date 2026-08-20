@@ -10,7 +10,7 @@
  *      attachment store and converted, by the four LOCAL tools (OCR, colour
  *      statistics, pixel scan, metadata), into a structured text block that
  *      is spliced into the system prompt as untrusted evidence — the
- *      "pseudo vision" flow Yinsen observed, made deterministic.
+ *      local pseudo-vision flow, made deterministic.
  *
  * No external vision API is called. Everything runs locally via sharp and
  * tesseract.js. The underlying DeepSeek HTTP request therefore carries only

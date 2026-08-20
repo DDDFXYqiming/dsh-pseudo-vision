@@ -1,7 +1,7 @@
 /**
  * Row-wise pixel scan via sharp.
  *
- * Implements the "像素行扫描" step Yinsen surfaced: for a configurable target
+ * Implements the "像素行扫描" step of the local evidence pipeline: for a configurable target
  * colour, walk every row of the image, count matching pixels, and report
  * rows whose density stands out. The model uses this to infer the position
  * of horizontal lines, dominant edges, etc.
@@ -129,7 +129,7 @@ export async function pixelScan(
 }
 
 /**
- * Format the scan result as the model-facing block. Mirrors Yinsen's
+ * Format the scan result as the model-facing evidence block.
  * "像素行扫描" rows: "y=… matched=N → 推断...".
  */
 export function formatPixelScanBlock(result: PixelScanResult): string {
