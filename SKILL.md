@@ -41,7 +41,7 @@ OCR 文字提取：
 
 ## How to invoke
 
-**自动触发**：默认装上后即对所有 text-only 模型生效。
+**自动触发**：默认装上后对 `deepseek-official` 路由下所有 text-only 模型生效（插件通过 cordis patch 接管该 provider）。
 
 **手动触发**：在用户消息前加 `[pseudo-vision]`，强制走转换。
 
