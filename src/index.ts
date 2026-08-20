@@ -55,7 +55,7 @@ import {
 } from "./provider-bridge.js";
 import { computeColorStats, formatColorStatsBlock } from "./vision/color-stats.js";
 import { readMeta, formatMetaBlock } from "./vision/meta.js";
-import { runOcr, formatOcrBlock } from "./vision/ocr.js";
+import { disposeOcr, formatOcrBlock, runOcr } from "./vision/ocr.js";
 import { pixelScan, formatPixelScanBlock } from "./vision/pixel-scan.js";
 
 export const name = "dsh-pseudo-vision";
@@ -67,6 +67,13 @@ export {
     genericProviderId,
     isGenericProviderId,
 } from "./provider-bridge.js";
+export {
+    buildVisionCacheKey,
+    imageToText,
+    OCR_CACHE_PIPELINE,
+    sha256Of,
+} from "./bridge.js";
+export { disposeOcr } from "./vision/ocr.js";
 
 const PROVIDER = "deepseek-official";
 const DEEPSEEK_NS = settingsNamespace("llm-deepseek");
@@ -80,6 +87,10 @@ export interface PseudoVisionConfig {
     maxImages?: number;
     /** tesseract language pack (default "chi_sim+eng"). */
     langs?: string;
+    /** OCR 分辨率预算：'auto' | 'small' | 'normal' | 'large' | 'mega'（缺省 auto，按图片大小自选）。 */
+    ocrBudget?: string;
+    /** 跳过预算缩放/自适应放大，保留原图尺寸进行本地 OCR 增强。 */
+    ocrNoResize?: boolean;
     /** Explicitly override the provider route this bridge serves. */
     provider?: string;
     /**
@@ -102,6 +113,8 @@ export const PseudoVisionConfigSchema: z<PseudoVisionConfig> = z.object({
     bypassCache: z.boolean().default(false),
     maxImages: z.number().step(1).min(1).max(32).default(8),
     langs: z.string().default("chi_sim+eng"),
+    ocrBudget: z.string().default("auto"),
+    ocrNoResize: z.boolean().default(false),
     provider: z.string().default(PROVIDER),
     bridgeOtherProviders: z.boolean().default(false),
     bridgeProviders: z.array(z.string()).default([]),
@@ -121,6 +134,8 @@ function deepseekPart(config: PseudoVisionConfig): DeepSeekConfig {
         bypassCache: _bypassCache,
         maxImages: _maxImages,
         langs: _langs,
+        ocrBudget: _ocrBudget,
+        ocrNoResize: _ocrNoResize,
         provider: _provider,
         bridgeOtherProviders: _bridgeOtherProviders,
         bridgeProviders: _bridgeProviders,
@@ -136,6 +151,8 @@ export function apply(ctx: Context, config: PseudoVisionConfig): void {
     const bypassCache = config.bypassCache ?? false;
     const maxImages = config.maxImages ?? 8;
     const langs = config.langs ?? "chi_sim+eng";
+    const ocrBudget = config.ocrBudget ?? "auto";
+    const ocrNoResize = config.ocrNoResize ?? false;
 
     let currentConfig: () => PseudoVisionConfig = () => config;
     let currentDeepSeek: () => DeepSeekConfig = () => deepseekPart(currentConfig());
@@ -188,6 +205,9 @@ export function apply(ctx: Context, config: PseudoVisionConfig): void {
         cacheDir,
         bypassCache,
         maxImages,
+        ocrBudget,
+        langs,
+        ocrNoResize,
     });
 
     ctx.llm.registerConfigurableProviders([{
@@ -207,7 +227,7 @@ export function apply(ctx: Context, config: PseudoVisionConfig): void {
         ctx.llm,
         ctx.attachments,
         genericTargets,
-        { cacheDir, bypassCache, maxImages },
+        { cacheDir, bypassCache, maxImages, ocrBudget, langs, ocrNoResize },
     );
     let genericRegistration: AdapterRegistrationHandle | undefined;
     let genericRoutes: string[] = [];
@@ -302,6 +322,12 @@ export function apply(ctx: Context, config: PseudoVisionConfig): void {
     });
 
     registerVisionTools(ctx, { langs });
+    ctx.effect(
+        () => async () => {
+            await disposeOcr();
+        },
+        "dsh-pseudo-vision: dispose OCR worker",
+    );
     ctx.logger.info(`[dsh-pseudo-vision] bridge active on provider "${provider}"; cache=${cacheDir}`);
 }
 
@@ -336,7 +362,9 @@ function registerVisionTools(ctx: Context, config: { langs: string }): void {
                 },
                 additionalProperties: false,
             },
-            render: (_args, value: { text: string; lines: number }) => value.text,
+            render: (_args, value: { text: string; lines: number }) => [
+                { type: "text", text: value.text },
+            ],
         },
         execute: async (args: { file_path: string; langs?: string }) => {
             const bytes = await readFile(args.file_path);
@@ -363,7 +391,9 @@ function registerVisionTools(ctx: Context, config: { langs: string }): void {
                 properties: { text: { type: "string" } },
                 additionalProperties: false,
             },
-            render: (_args, value: { text: string }) => value.text,
+            render: (_args, value: { text: string }) => [
+                { type: "text", text: value.text },
+            ],
         },
         execute: async (args: { file_path: string }) => {
             const bytes = await readFile(args.file_path);
@@ -392,12 +422,14 @@ function registerVisionTools(ctx: Context, config: { langs: string }): void {
                 properties: { text: { type: "string" } },
                 additionalProperties: false,
             },
-            render: (_args, value: { text: string }) => value.text,
+            render: (_args, value: { text: string }) => [
+                { type: "text", text: value.text },
+            ],
         },
         execute: async (args: { file_path: string; target?: string; threshold?: number }) => {
             const bytes = await readFile(args.file_path);
             const result = await pixelScan(bytes, {
-                target: args.target ?? "red",
+                target: args.target ?? "#ff0000",
                 threshold: args.threshold ?? 0.05,
             });
             return { text: formatPixelScanBlock(result) };
@@ -422,7 +454,9 @@ function registerVisionTools(ctx: Context, config: { langs: string }): void {
                 properties: { text: { type: "string" } },
                 additionalProperties: false,
             },
-            render: (_args, value: { text: string }) => value.text,
+            render: (_args, value: { text: string }) => [
+                { type: "text", text: value.text },
+            ],
         },
         execute: async (args: { file_path: string }) => {
             const bytes = await readFile(args.file_path);

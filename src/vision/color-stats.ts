@@ -21,6 +21,8 @@ export interface ColorBucket {
 export interface ColorStats {
     totalPixels: number;
     buckets: ColorBucket[];
+    /** Mean perceived brightness (0..255), used for dark-mode detection. */
+    averageLuminance?: number;
 }
 
 interface BucketSpec {
@@ -59,11 +61,13 @@ export async function computeColorStats(imageBytes: Buffer): Promise<ColorStats>
     const { width, height, channels } = info;
     const totalPixels = width * height;
     const counts = new Map<string, number>();
+    let luminanceSum = 0;
 
     for (let i = 0; i < data.length; i += channels) {
         const r = data[i] ?? 0;
         const g = data[i + 1] ?? 0;
         const b = data[i + 2] ?? 0;
+        luminanceSum += 0.2126 * r + 0.7152 * g + 0.0722 * b;
 
         let matched = false;
         for (const bucket of BUCKETS) {
@@ -90,7 +94,11 @@ export async function computeColorStats(imageBytes: Buffer): Promise<ColorStats>
 
     buckets.sort((a, b) => b.share - a.share);
 
-    return { totalPixels, buckets };
+    return {
+        totalPixels,
+        buckets,
+        averageLuminance: luminanceSum / Math.max(1, totalPixels),
+    };
 }
 
 /**
@@ -103,5 +111,9 @@ export function formatColorStatsBlock(stats: ColorStats): string {
         const pct = (b.share * 100).toFixed(1);
         return `  · ${b.name} ${pct}%`;
     });
-    return `[颜色统计] 总像素 ${stats.totalPixels}\n${lines.join('\n')}`;
+    const luminance = stats.averageLuminance;
+    const brightness = typeof luminance === 'number' && Number.isFinite(luminance)
+        ? `\n  · 平均亮度 ${luminance.toFixed(1)}/255`
+        : '';
+    return `[颜色统计] 总像素 ${stats.totalPixels}${brightness}\n${lines.join('\n')}`;
 }

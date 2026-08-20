@@ -11,6 +11,7 @@ import type { LlmRuntime } from '@deepseek-ai/dsh-llm';
 import {
     GENERIC_PROVIDER_PREFIX,
     ProviderVisionBridgeAdapter,
+    buildVisionCacheKey,
     genericProviderId,
     isGenericProviderId,
 } from '../lib/index.js';
@@ -82,7 +83,7 @@ test('generic sibling route advertises image and delegates image-free requests',
         runtime,
         {} as AttachmentStore,
         targets,
-        { cacheDir: '.tmp-test-cache', bypassCache: false, maxImages: 8 },
+        { cacheDir: '.tmp-test-cache', bypassCache: false, maxImages: 8, ocrBudget: 'auto' },
     );
 
     const models = await adapter.listModels(alias);
@@ -131,7 +132,7 @@ test('native vision models are not listed on the sibling route', async () => {
         runtime,
         {} as AttachmentStore,
         new Map([[alias, 'vision-provider']]),
-        { cacheDir: '.tmp-test-cache', bypassCache: false, maxImages: 8 },
+        { cacheDir: '.tmp-test-cache', bypassCache: false, maxImages: 8, ocrBudget: 'auto' },
     );
 
     const models = await adapter.listModels(alias);
@@ -147,7 +148,11 @@ test('generic sibling route removes images before delegating to text-only provid
     const cacheDir = await mkdtemp(join(tmpdir(), 'dsh-pseudo-vision-test-'));
     try {
         const digest = createHash('sha256').update(IMAGE).digest('hex');
-        await writeFile(join(cacheDir, `${digest}.json`), JSON.stringify({ text: 'cached local vision evidence' }));
+        // 40×40 fixture 的 'auto' 预算解析为 'normal'，缓存键同时带预算与管线参数。
+        await writeFile(
+            join(cacheDir, buildVisionCacheKey(digest, 'normal')),
+            JSON.stringify({ text: 'cached local vision evidence' }),
+        );
 
         const calls: Array<Record<string, unknown>> = [];
         const runtime = createRuntime(calls);
@@ -160,7 +165,7 @@ test('generic sibling route removes images before delegating to text-only provid
             runtime,
             attachments,
             targets,
-            { cacheDir, bypassCache: false, maxImages: 8 },
+            { cacheDir, bypassCache: false, maxImages: 8, ocrBudget: 'auto' },
         );
 
         for await (const _chunk of adapter.stream(imageOptions(alias) as never)) {

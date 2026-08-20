@@ -48,11 +48,23 @@ const DEFAULT_OPTIONS: Required<PixelScanOptions> = {
 };
 
 function parseHex(hex: string): [number, number, number] {
-    const normalised = hex.replace(/^#/, '').padEnd(6, '0');
-    const r = parseInt(normalised.slice(0, 2), 16);
-    const g = parseInt(normalised.slice(2, 4), 16);
-    const b = parseInt(normalised.slice(4, 6), 16);
-    return [r, g, b];
+    const aliases: Record<string, string> = {
+        red: '#ff0000',
+        green: '#00ff00',
+        blue: '#0000ff',
+        white: '#ffffff',
+        black: '#000000',
+    };
+    const value = aliases[hex.trim().toLowerCase()] ?? hex;
+    const normalised = value.replace(/^#/, '').padEnd(6, '0');
+    const r = Number.parseInt(normalised.slice(0, 2), 16);
+    const g = Number.parseInt(normalised.slice(2, 4), 16);
+    const b = Number.parseInt(normalised.slice(4, 6), 16);
+    return [
+        Number.isFinite(r) ? r : 0,
+        Number.isFinite(g) ? g : 0,
+        Number.isFinite(b) ? b : 0,
+    ];
 }
 
 /**

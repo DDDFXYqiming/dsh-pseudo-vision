@@ -43,6 +43,15 @@ export interface PseudoVisionBridgeOptions {
     readonly cacheDir: string;
     readonly bypassCache: boolean;
     readonly maxImages: number;
+    /**
+     * OCR 分辨率预算：'auto' | 'small' | 'normal' | 'large' | 'mega'。
+     * 可选：buildPseudoVisionRequest 对缺省值回退 'auto'（按图片大小自选）。
+     */
+    readonly ocrBudget?: string;
+    /** Tesseract language pack, defaulting to chi_sim+eng. */
+    readonly langs?: string;
+    /** Skip budget resize/upscale while retaining OCR enhancement. */
+    readonly ocrNoResize?: boolean;
 }
 
 const IMAGE_INPUT = ["text", "image"] as const;
@@ -89,9 +98,12 @@ export async function buildPseudoVisionRequest(
         const text = await imageToText(image, {
             cacheDir: bridgeOptions.cacheDir,
             bypassCache: bridgeOptions.bypassCache,
+            ocrBudget: bridgeOptions.ocrBudget ?? "auto",
+            langs: bridgeOptions.langs ?? "chi_sim+eng",
+            ocrNoResize: bridgeOptions.ocrNoResize ?? false,
         });
         observations.push(
-            `===== 图片 ${index + 1}（${refs[index]?.mediaType}）=====\\n${text}`,
+            `===== 图片 ${index + 1}（${refs[index]?.mediaType}）=====\n${text}`,
         );
     }
 
@@ -100,7 +112,7 @@ export async function buildPseudoVisionRequest(
         messages: withoutImages(options.messages, refs),
         system: appendVisionContext(
             options.system,
-            observations.join("\\n\\n"),
+            observations.join("\n\n"),
             task,
             refs.length,
         ),
@@ -113,6 +125,9 @@ export class PseudoVisionBridgeAdapter extends LlmAdapter {
     readonly #cacheDir: string;
     readonly #bypassCache: boolean;
     readonly #maxImages: number;
+    readonly #ocrBudget: string;
+    readonly #langs: string;
+    readonly #ocrNoResize: boolean;
 
     constructor(
         deepseek: DeepSeekAdapter,
@@ -125,6 +140,9 @@ export class PseudoVisionBridgeAdapter extends LlmAdapter {
         this.#cacheDir = options.cacheDir;
         this.#bypassCache = options.bypassCache;
         this.#maxImages = options.maxImages;
+        this.#ocrBudget = options.ocrBudget ?? "auto";
+        this.#langs = options.langs ?? "chi_sim+eng";
+        this.#ocrNoResize = options.ocrNoResize ?? false;
     }
 
     providerInfo(provider: string): LlmProviderInfo {
@@ -177,6 +195,9 @@ export class PseudoVisionBridgeAdapter extends LlmAdapter {
                 cacheDir: this.#cacheDir,
                 bypassCache: this.#bypassCache,
                 maxImages: this.#maxImages,
+                ocrBudget: this.#ocrBudget,
+                langs: this.#langs,
+                ocrNoResize: this.#ocrNoResize,
             },
         );
         if (delegated === undefined) {

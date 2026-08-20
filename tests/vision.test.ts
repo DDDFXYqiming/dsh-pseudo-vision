@@ -13,6 +13,19 @@ import assert from 'node:assert/strict';
 import { computeColorStats, formatColorStatsBlock } from '../src/vision/color-stats.ts';
 import { readMeta, formatMetaBlock } from '../src/vision/meta.ts';
 import { pixelScan, formatPixelScanBlock } from '../src/vision/pixel-scan.ts';
+import {
+    budgetResize,
+    isDarkModeFromStats,
+    preprocessForOcr,
+    smartResize,
+} from '../src/vision/preprocess.ts';
+import {
+    averageConfidence,
+    formatOcrRetryBlock,
+    lowConfidenceRegions,
+    type OcrResult,
+} from '../src/vision/ocr.ts';
+import { planChunkTops } from '../src/vision/chunk-ocr.ts';
 
 const TINY_WHITE_PNG = Buffer.from(
     '89504e470d0a1a0a0000000d4948445200000028000000280802000000039c2f3a0000000970485973000003e8000003e801b57b526b0000004549444154789cedcd3101002000c3b0fa370df710509ec640389f506c419b1ec51abc6a156bf0aa55acc1ab56b106af5ac51abc6a156bf0aa55acc1ab56b106af5ac5c78a2f2cd0ae4f897a37f10000000049454e44ae426082',
@@ -51,6 +64,23 @@ test('pixel scan finds nothing on a uniform white image', async () => {
     assert.ok(formatted.includes('无高密度行'));
 });
 
+test('pixel scan accepts named red and finds a dense horizontal line', async () => {
+    const sharpModule = await tryImport<typeof import('sharp')>('sharp');
+    if (!sharpModule) return;
+    const sharp = sharpModule.default;
+
+    const image = await sharp(Buffer.from(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">'
+        + '<rect width="100" height="100" fill="white"/>'
+        + '<rect x="5" y="45" width="90" height="10" fill="red"/>'
+        + '</svg>',
+    )).png().toBuffer();
+    const result = await pixelScan(image, { target: 'red' });
+
+    assert.ok(result.rows.length > 0);
+    assert.ok((result.peak?.density ?? 0) > 0.5);
+});
+
 test('meta exposes dimensions and samples', async () => {
     const sharp = await tryImport<typeof import('sharp').default>('sharp');
     if (!sharp) return;
@@ -73,4 +103,128 @@ test('ocr gracefully reports no text', async (t) => {
     // sandbox cannot reach the CDN so the suite stays green offline.
     t.diagnostic('tesseract.js present; OCR run needs network for tessdata — skipping in sandbox');
     return;
+});
+
+test('preprocessForOcr runs without error', async () => {
+    const sharp = await tryImport<typeof import('sharp').default>('sharp');
+    if (!sharp) return;
+
+    const result = await preprocessForOcr(TINY_WHITE_PNG, 'normal');
+
+    // 40×40 → 预算放大到 224² → 自适应放大到 800² → 白边 ±10 → 820²
+    assert.ok(result.bytes.length > 0);
+    assert.equal(result.resized, true);
+    assert.equal(result.enhanced, true);
+    assert.equal(result.upscaled, true);
+    assert.equal(result.width, 820);
+    assert.equal(result.height, 820);
+    assert.equal(result.budget, 'normal');
+});
+
+test('ocrNoResize keeps the original dimensions before enhancement', async () => {
+    const sharp = await tryImport<typeof import('sharp').default>('sharp');
+    if (!sharp) return;
+
+    const result = await preprocessForOcr(TINY_WHITE_PNG, 'mega', false, true);
+
+    assert.equal(result.resized, false);
+    assert.equal(result.upscaled, false);
+    assert.equal(result.width, 60);
+    assert.equal(result.height, 60);
+    assert.equal(result.budget, 'mega');
+});
+
+test('budgetResize keeps small images in budget', async () => {
+    const sharp = await tryImport<typeof import('sharp').default>('sharp');
+    if (!sharp) return;
+
+    const result = await budgetResize(TINY_WHITE_PNG, 'normal');
+
+    // 40×40（1600 像素）远低于 224²，应放大并吸附到 28 的整数倍。
+    assert.equal(result.resized, true);
+    assert.equal(result.width, 224);
+    assert.equal(result.height, 224);
+    assert.ok(result.width * result.height <= 1024 * 1024);
+    assert.ok(result.bytes.length > 0);
+});
+
+test('smartResize stays inside the max pixel budget after grid snapping', () => {
+    const result = smartResize(4000, 1000, 224 * 224, 1024 * 1024);
+
+    assert.equal(result.width % 28, 0);
+    assert.equal(result.height % 28, 0);
+    assert.ok(result.width * result.height <= 1024 * 1024);
+    assert.ok(result.width > 0 && result.height > 0);
+});
+
+test('dark-mode detection and low-confidence retry formatting are deterministic', () => {
+    assert.equal(isDarkModeFromStats({
+        totalPixels: 100,
+        buckets: [
+            { name: 'black', share: 0.75, pixels: 75 },
+            { name: 'grey', share: 0.1, pixels: 10 },
+            { name: 'white', share: 0.15, pixels: 15 },
+        ],
+    }), true);
+    assert.equal(isDarkModeFromStats({
+        totalPixels: 100,
+        averageLuminance: 35,
+        buckets: [{ name: 'other', share: 0.98, pixels: 98 }],
+    }), true);
+    assert.equal(isDarkModeFromStats({
+        totalPixels: 100,
+        averageLuminance: 230,
+        buckets: [{ name: 'white', share: 0.9, pixels: 90 }],
+    }), false);
+
+    const initial: OcrResult = {
+        langs: 'chi_sim+eng',
+        fullText: '整体文本',
+        lines: [
+            {
+                text: '低置信度',
+                confidence: 42,
+                bbox: { x1: 0.1, y1: 0.2, x2: 0.8, y2: 0.3 },
+            },
+            {
+                text: '可靠文本',
+                confidence: 95,
+                bbox: { x1: 0.1, y1: 0.4, x2: 0.8, y2: 0.5 },
+            },
+        ],
+    };
+    assert.equal(averageConfidence(initial), 68.5);
+    assert.deepEqual(lowConfidenceRegions(initial, 60), [initial.lines[0]?.bbox]);
+
+    const block = formatOcrRetryBlock({
+        initial,
+        retries: [{
+            region: initial.lines[0]!.bbox,
+            pixelFocus: true,
+            result: { ...initial, fullText: '复核文本' },
+        }],
+    });
+    assert.match(block, /低置信度重试 1 区域/);
+    assert.match(block, /命中像素扫描焦点/);
+    assert.doesNotMatch(block, /\\\\n/);
+});
+
+test('planChunkTops splits tall images', () => {
+    // 5000px 高：step = 2000 - 100 = 1900 → [0, 1900, 3800]。
+    const tops = planChunkTops(5000, 2000, 100);
+    assert.deepEqual(tops, [0, 1900, 3800]);
+
+    // 每块覆盖 [top, top+targetHeight)，末块 3800 + 2000 ≥ 5000 盖满原图。
+    const covered = tops.every((top, index) => {
+        const bottom = Math.min(top + 2000, 5000);
+        const nextTop = tops[index + 1] ?? 5000;
+        return bottom >= nextTop;
+    });
+    assert.equal(covered, true);
+
+    // 不同 step（overlap=200）：→ [0, 1800, 3600, 5400]。
+    assert.deepEqual(planChunkTops(6500, 2000, 200), [0, 1800, 3600, 5400]);
+
+    // 非法 overlap（>= targetHeight 的一半）直接抛错，避免死循环。
+    assert.throws(() => planChunkTops(5000, 2000, 1000), RangeError);
 });
