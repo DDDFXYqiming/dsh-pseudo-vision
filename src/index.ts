@@ -50,7 +50,7 @@ import { runOcr, formatOcrBlock } from "./vision/ocr.js";
 import { pixelScan, formatPixelScanBlock } from "./vision/pixel-scan.js";
 
 export const name = "dsh-pseudo-vision";
-export const inject = ["llm", "attachments"];
+export const inject = ["llm", "attachments", "tools"];
 
 const PROVIDER = "deepseek-official";
 const DEEPSEEK_NS = settingsNamespace("llm-deepseek");
