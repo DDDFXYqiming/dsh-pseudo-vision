@@ -55,7 +55,13 @@ import {
 } from "./provider-bridge.js";
 import { computeColorStats, formatColorStatsBlock } from "./vision/color-stats.js";
 import { readMeta, formatMetaBlock } from "./vision/meta.js";
-import { disposeOcr, formatOcrBlock, runOcr } from "./vision/ocr.js";
+import {
+    disposeOcr,
+    formatDigitFixBlock,
+    formatOcrBlock,
+    formatOcrRetryBlock,
+    ocrWithLowConfidenceRetry,
+} from "./vision/ocr.js";
 import { pixelScan, formatPixelScanBlock } from "./vision/pixel-scan.js";
 
 export const name = "dsh-pseudo-vision";
@@ -342,7 +348,7 @@ function registerVisionTools(ctx: Context, config: { langs: string }): void {
 
     tools.register(defineTool({
         name: "vision_ocr",
-        description: "Extract every text line in an image, returning recognised text with a normalised bounding box. Uses local tesseract.js; no network.",
+        description: "Extract every text line in an image, returning recognised text with a normalised bounding box. Runs the full local pipeline: low-confidence lines are re-read from enlarged crops, and digit-critical tokens (IP/URL/port) get a whitelist verification pass. Local tesseract.js; no network.",
         parameters: {
             type: "object",
             required: ["file_path"],
@@ -368,8 +374,15 @@ function registerVisionTools(ctx: Context, config: { langs: string }): void {
         },
         execute: async (args: { file_path: string; langs?: string }) => {
             const bytes = await readFile(args.file_path);
-            const result = await runOcr(bytes, args.langs ?? langs);
-            return { text: formatOcrBlock(result), lines: result.lines.length };
+            const result = await ocrWithLowConfidenceRetry(bytes, args.langs ?? langs);
+            const text = [
+                formatOcrBlock(result.initial),
+                formatOcrRetryBlock(result),
+                formatDigitFixBlock(result.digitFixes),
+            ]
+                .filter((block) => block.length > 0)
+                .join("\n");
+            return { text, lines: result.initial.lines.length };
         },
     }));
 
