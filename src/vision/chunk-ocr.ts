@@ -11,6 +11,7 @@ import {
     formatOcrBlock,
     formatOcrRetryBlock,
     ocrWithLowConfidenceRetry,
+    type DigitFix,
 } from './ocr.ts';
 
 export type ChunkPreprocessor = (bytes: Buffer) => Promise<Buffer>;
@@ -48,6 +49,8 @@ export interface ChunkOcrResult {
     chunkCount: number;
     /** 所有块触发的低置信度局部重试次数。 */
     retryCount: number;
+    /** 全部块累计的数字复核修正。 */
+    digitFixes: DigitFix[];
 }
 
 /**
@@ -117,6 +120,7 @@ export async function chunkedOcr(
                 .join('\n'),
             chunkCount: 1,
             retryCount: result.retries.length,
+            digitFixes: result.digitFixes,
         };
     }
 
@@ -124,6 +128,7 @@ export async function chunkedOcr(
     const chunks: ChunkOcrResult['chunks'] = [];
     const texts: string[] = [];
     let retryCount = 0;
+    const digitFixes: DigitFix[] = [];
     for (let index = 0; index < tops.length; index += 1) {
         const top = tops[index] ?? 0;
         const bottom = Math.min(top + targetHeight, height);
@@ -136,6 +141,7 @@ export async function chunkedOcr(
             .filter((y) => y >= 0 && y <= 1);
         const result = await recognize(chunkBytes, localFocusY);
         retryCount += result.retries.length;
+        digitFixes.push(...result.digitFixes);
         const retryBlock = formatOcrRetryBlock(result);
         const text = `[第 ${index + 1}/${tops.length} 块，y=${top}-${bottom}]\n`
             + formatOcrBlock(result.initial)
@@ -149,5 +155,6 @@ export async function chunkedOcr(
         fullText: texts.join('\n\n'),
         chunkCount: chunks.length,
         retryCount,
+        digitFixes,
     };
 }

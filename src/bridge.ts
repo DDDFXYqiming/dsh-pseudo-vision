@@ -28,6 +28,7 @@ import {
 } from './vision/color-stats.js';
 import { readMeta, formatMetaBlock } from './vision/meta.js';
 import {
+    formatDigitFixBlock,
     formatOcrBlock,
     formatOcrRetryBlock,
     ocrWithLowConfidenceRetry,
@@ -99,9 +100,11 @@ const AUTO_LARGE_THRESHOLD = 2_100_000;
  * v2: universal row+col pixel scan (non-background buckets, focusX) joined
  * the evidence set, so results produced by the red-only scan must not be
  * served from cache.
+ * v3: digit verification pass (whitelist re-OCR of IP/URL/port tokens)
+ * corrects OCR line text, so pre-digit-pass cache entries are stale.
  */
 export const OCR_CACHE_PIPELINE =
-    'ocr-v2-min224-factor28-up800-border10-dark-enhance-chunk3000-2000-100-retry60-3x2-scan-rowcol-v1';
+    'ocr-v3-min224-factor28-up800-border10-dark-enhance-chunk3000-2000-100-retry60-3x2-scan-rowcol-v1-digitverify-v1';
 
 export function buildVisionCacheKey(
     sha256: string,
@@ -233,7 +236,10 @@ export async function imageToText(
         if (chunked !== null) {
             chunkCount = chunked.chunkCount;
             retryCount = chunked.retryCount;
-            ocrBlock = formatChunkedOcrBlock(chunked);
+            ocrBlock = [
+                formatChunkedOcrBlock(chunked),
+                formatDigitFixBlock(chunked.digitFixes),
+            ].filter((block) => block.length > 0).join('\n');
             preprocessSummary = `${origWidth}×${origHeight}（每块预算预处理）`;
         }
     } else {
@@ -266,7 +272,11 @@ export async function imageToText(
         if (ocr !== null) {
             retryCount = ocr.retries.length;
             const retryBlock = formatOcrRetryBlock(ocr);
-            ocrBlock = [formatOcrBlock(ocr.initial), retryBlock]
+            ocrBlock = [
+                formatOcrBlock(ocr.initial),
+                retryBlock,
+                formatDigitFixBlock(ocr.digitFixes),
+            ]
                 .filter((block) => block.length > 0)
                 .join('\n');
         }

@@ -10,4 +10,4 @@ lib/
 coverage/
 dist/
 build/
-tests/.fixtures/
+tests/.fixtures/*.traineddata
