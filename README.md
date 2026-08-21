@@ -22,13 +22,13 @@
 | 工具 | 作用 | 实现 |
 |---|---|---|
 | `vision_ocr` | 提取图中所有文字（带归一化坐标） | tesseract.js（chi_sim + eng，本地语言包） |
-| `vision_color_stats` | 像素占比分析（白/黑/灰/红/绿/蓝等） | sharp + 直方图统计 |
-| `vision_pixel_scan` | 逐行检测目标色像素密度 | sharp raw pixel access |
+| `vision_color_stats` | 像素占比分析（白/黑/灰/红/绿/蓝/黄/青/品红/其他） | sharp + 直方图统计 |
+| `vision_pixel_scan` | 自动桥接下逐行/逐列检测多色桶像素密度；手动调用仍可指定目标色 | sharp raw pixel access |
 | `vision_meta` | 尺寸、格式、色彩空间、四角/中心颜色采样 | sharp metadata |
 
-## OCR 优化管线（v0.4.0）
+## 本地证据管线（v0.5.0）
 
-图片证据仍然全部在本机生成；OCR 现在不再固定压到 512px，而是按预算走一条可追溯的预处理管线：
+图片证据仍然全部在本机生成；OCR 按预算走一条可追溯的预处理管线，像素扫描也已通用化：
 
 ```yaml
 - id: dsh-pseudo-vision
@@ -42,8 +42,8 @@
 
 ```text
 原图 bytes
-├─ vision_color_stats → 原图颜色占比
-├─ vision_pixel_scan  → 原图目标色/红色行
+├─ vision_color_stats → 原图颜色占比（9 桶分类）
+├─ vision_pixel_scan  → 原图通用行/列扫描（多色桶，背景桶抑制）
 ├─ vision_meta        → 原图尺寸、格式与采样
 └─ vision_ocr         → OCR 专用副本（预算、灰度、反色、增强）
 ```
@@ -52,6 +52,20 @@
 
 `ocrNoResize: true` 的含义是跳过 OCR 分支的预算缩放和自适应放大，保留原图的几何尺寸；它**不是**完全关闭预处理，OCR 副本仍会增强并添加白边（最终副本会因此增加边框像素）。它也不影响另外三个工具读取原图。
 
+### 像素扫描通用化（v0.5.0）
+
+旧版自动桥接的像素扫描**只检测红色水平行**，对没有红色元素的 UI 截图常常输出"无红色高密度行"，模型不得不自己再调多次 `vision_pixel_scan` 用不同目标色补扫。
+
+v0.5.0 改为**通用行+列扫描**：
+
+- 复用颜色统计的 9 个桶（白/黑/灰/红/绿/蓝/黄/青/品红），同时扫描**行和列**
+- 颜色统计中占比 `≥30%` 的桶被识别为背景候选桶；这些桶的行/列密度 `≥90%` 时视为纯背景而**不上报**，但 `[0.15, 0.90)` 区间的部分带（如表格交替行、灰分隔带）仍会 surfaced
+- 非背景桶统一阈值 `0.15`，每桶最多上报 5 条行命中 + 5 条列命中
+- 颜色统计与像素扫描**共用同一次 512px 降采样** raw 数据，保证两者看到同一张图
+- 扫描结果同时产生 `focusY`（行命中）和 `focusX`（列命中），低置信度 OCR 复核会据此放大对应轴的裁剪 padding
+
+手动调用 `vision_pixel_scan` 时仍可用 `target` 参数指定任意颜色，保持旧行为不变。
+
 | 阶段 | 行为 |
 |---|---|
 | 预算与吸附 | `small=512²`、`normal=1024²`、`large=1448²`、`mega=4096²`；按 Qwen 风格 `minPixels/maxPixels + 28` 倍数网格吸附 |
@@ -59,8 +73,9 @@
 | 小字放大 | OCR 前对小输入用 Lanczos 放大（不超过该预算的最长边上限） |
 | 深色与低对比度 | 自动依据原图颜色统计判断暗底，反色后执行灰度、对比度拉伸、轻锐化，并给贴边文字补白边 |
 | 超长截图 | 原图高度超过 3000px 时先按原图切成 2000px 高、100px 重叠的块，再对每块独立预算预处理和 OCR，输出 `[第 i/N 块，y=...]` 边界 |
-| 低置信度复核 | Tesseract 置信度低于 60 的最多 3 行会裁剪、补边、2× 放大后复核；红色行像素扫描命中时扩大该复核区域 |
-| 缓存隔离 | 缓存键包含 `sha256 + 解析后的 budget + langs/resize 开关 + OCR 管线参数版本`；旧缓存文件保留，不会与新管线串结果 |
+| 低置信度复核 | Tesseract 置信度低于 60 的最多 3 行会裁剪、补边、2× 放大后复核；像素扫描焦点行/列会扩大对应轴的复核区域 |
+| 通用像素扫描 | 9 色桶 × 行/列扫描，背景桶 `≥90%` 抑制，`[0.15,0.90)` 区间保留，结果进入伪视觉上下文 |
+| 缓存隔离 | 缓存键包含 `sha256 + 解析后的 budget + langs/resize 开关 + OCR 管线参数版本 + 扫描版本`；旧缓存文件保留，不会与新管线串结果 |
 
 `auto` 适合默认使用；密集表格、细小字体或文档可显式选择 `large`/`mega`，只想限制本地 CPU/内存时选择 `small`。需要保留 OCR 原图尺寸时设 `ocrNoResize: true`（仍会执行灰度/对比度/锐化/白边增强）。颜色统计、像素扫描、元信息始终读取原图，不会因为 OCR 预处理而改变模型看到的颜色证据。`bypassCache: true` 可强制重算。
 
@@ -109,8 +124,12 @@ dsh plugin --profile web add github:DDDFXYqiming/dsh-pseudo-vision
 OCR 文本：23 行（"了解 deepseek harness 的 dsh 安装"等）
 OCR 低置信度重试：1 个区域（2× 局部复核）
 元信息：image/png, 217068B, 原图尺寸 1919×1019
-颜色统计：白色 94.1%、灰色 5.1%、其他 0.6%  → 推断浅色 UI
-像素扫描：无红色高密度行
+颜色统计：白色 94.1%、灰色 5.1%、其他 0.6%
+像素扫描：512×H 背景豁免:grey 4 条命中（行 3 / 列 1）
+  · 行 y=42.5%  green  63.0%
+  · 行 y=88.0%  grey   51.2%
+  · 列 x=12.5%  blue   71.4%
+  · 列 x=50.0%  white  85.0%
 ```
 
 模型基于以上结构化证据"脑补"出整张图内容。
@@ -126,7 +145,7 @@ OCR 低置信度重试：1 个区域（2× 局部复核）
 ## 权限
 
 - 读取工作区内的图片附件
-- 写入临时缓存到 `~/.dsh/profiles/<profile>/.dsh-pseudo-vision/cache/`（键含 sha256、budget、langs/resize 开关、OCR 管线参数版本）
+- 写入临时缓存到 `~/.dsh/profiles/<profile>/.dsh-pseudo-vision/cache/`（键含 sha256、budget、langs/resize 开关、OCR 管线参数版本、扫描版本）
 - 进程内 tesseract.js OCR + sharp（首次运行从 tesseract CDN 下载语言包到内置缓存，之后离线）
 - 接管 `deepseek-official` provider（禁用官方 llm-deepseek，由插件重新注册）
 - 按配置（`bridgeProviders` 白名单 / `bridgeOtherProviders` 全开）为指定 provider 注册兄弟路由；兄弟 adapter 通过公开的 `ctx.llm` API 委托原始 provider。**默认不注册任何其他 provider 的兄弟路由**
@@ -146,11 +165,12 @@ OCR 低置信度重试：1 个区域（2× 局部复核）
 
 ## ⚠️ 已知边界 / 路线图
 
-当前版本（v0.4.0）已支持通过兄弟路由桥接其他 live provider，并新增可配置 OCR 预算、长截图分块、暗色/低对比度增强、低置信度局部复核与参数隔离缓存；跨 provider 仍**默认关闭**（`bridgeProviders` 白名单开启），且需要用户在模型选择器中选择带 `· Pseudo Vision` 标记的路由；原始 provider 不会被隐式改写。
+当前版本（v0.5.0）已支持通过兄弟路由桥接其他 live provider、可配置 OCR 预算、长截图分块、暗色/低对比度增强、低置信度局部复核、参数隔离缓存，以及 v0.5.0 新增的通用行+列多色像素扫描；跨 provider 仍**默认关闭**（`bridgeProviders` 白名单开启），且需要用户在模型选择器中选择带 `· Pseudo Vision` 标记的路由；原始 provider 不会被隐式改写。
 
 | 项 | 状态 | 说明 |
 |---|---|---|
 | **其他 text-only 模型支持**（`llm-pi-ai` 下的 GLM / Qwen / Kimi / OpenRouter 等） | ✅ 已实现（默认关闭） | 通过 `bridgeProviders` 白名单或 `bridgeOtherProviders` 开启；开启后注册 `dsh-pseudo-vision/<provider>` 兄弟路由，原始路由保持不变 |
+| **通用像素扫描**（行+列、多色桶、背景豁免） | ✅ 已实现 | v0.5.0 自动桥接不再只扫红色；输出 9 色桶的行/列命中，纯背景桶抑制，结果进入伪视觉上下文 |
 | **外部 Vision Backend**（Qwen-VL / Gemini / OpenAI-compatible） | ❌ 未实现 | 当前版本坚持本地 OCR/颜色/像素/元信息；后续可增加显式 opt-in 的外部视觉后端 |
 | **自动切换兄弟路由** | ⚠️ 未实现 | 当前需在模型选择器手动选择 `· Pseudo Vision` 路由，避免污染原始会话模型选择 |
 | **npm 发布** | ❌ 未发布 | 发布为 `dsh-pseudo-vision` npm 包，支持 `dsh plugin add` 一行安装 |
