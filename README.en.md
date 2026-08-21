@@ -134,6 +134,8 @@ Or bridge all providers at once except those in `excludeProviders` (caution: eve
 
 Once enabled, `dsh-pseudo-vision/<provider>` sibling routes (displayed as `· Pseudo Vision`) appear in the model selector; selecting one makes text-only models automatically go through the local pseudo-vision conversion, while native vision models keep native pass-through.
 
+The plugin does not register a placeholder card under Settings → Plugin Configuration: use the Plugin List for installation status and keep cross-provider allowlists in the configuration file shown above.
+
 **Example output** (pseudo-vision evidence actually received by deepseek-v4-flash, excerpt from a PowerShell terminal screenshot):
 
 ```
@@ -204,7 +206,6 @@ The current version (v0.5.0) already supports bridging other live providers via 
 | **Local OCR engine upgrade** (RapidOCR / PaddleOCR ONNX) | ⏸️ Deferred by user decision | Higher accuracy than Tesseract but adds a ~20MB model, violating the "no model" red line; currently mitigated by the v0.5.1 digit re-verification channel (pure parameterized re-recognition), to be revisited if needed |
 | **Automatic sibling-route switching** | ⚠️ Not implemented | Currently the `· Pseudo Vision` route must be picked manually in the model selector, to avoid polluting the original session's model selection |
 | **npm release** | ❌ Not released | Would be published as the `dsh-pseudo-vision` npm package, enabling one-line `dsh plugin add` installation |
-| **Client-side enhancements** | ⚠️ Basic | A settings plugin card exists; automatic composer image hints are not done |
 | **Multi-language OCR configuration** | ✅ Supported | `langs` config key (default `chi_sim+eng`) |
 | **Image pre-scaling strategy** | ✅ Implemented | `ocrBudget` + smart resize + adaptive small-text upscaling; `auto` picks normal/large by original pixel count |
 | **Long screenshot OCR** | ✅ Implemented | When the original height > 3000px: 2000px blocks with 100px overlap, per-block budget preprocessing, and merged boundaries |

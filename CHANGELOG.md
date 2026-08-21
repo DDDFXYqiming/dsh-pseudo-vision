@@ -2,6 +2,11 @@
 
 All notable changes to dsh-pseudo-vision are documented here.
 
+## [Unreleased]
+
+### Removed
+- Removed the browser client bundle and its Settings → Plugins configuration card. The plugin has no interactive settings, remains visible in the installed-plugin inventory, and keeps provider allowlists in configuration files.
+
 ## [0.5.1] - 2026-08-21
 
 ### Added

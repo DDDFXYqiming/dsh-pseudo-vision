@@ -134,6 +134,8 @@ dsh plugin --profile web add github:DDDFXYqiming/dsh-pseudo-vision
 
 开启后，模型选择器会出现 `dsh-pseudo-vision/<provider>`（显示为 `· Pseudo Vision`）兄弟路由；选择它，text-only 模型会自动走本地伪视觉转换，原生视觉模型保持原生透传。
 
+插件不会在“设置 → 插件配置”注册占位卡片：安装状态请在“插件列表”查看，跨 provider 白名单继续通过上述配置文件维护。
+
 **效果示例**（deepseek-v4-flash 实测收到的伪视觉证据，PowerShell 终端截图节选）：
 
 ```
@@ -204,7 +206,6 @@ dsh plugin --profile web add github:DDDFXYqiming/dsh-pseudo-vision
 | **本地 OCR 引擎升级**（RapidOCR / PaddleOCR ONNX） | ⏸️ 用户裁决暂缓 | 精度高于 Tesseract 但引入 ~20MB 模型，违背"无模型"红线；当前以 v0.5.1 数字复核通道（纯参数化重识别）缓解字级错误，将来有需要再议 |
 | **自动切换兄弟路由** | ⚠️ 未实现 | 当前需在模型选择器手动选择 `· Pseudo Vision` 路由，避免污染原始会话模型选择 |
 | **npm 发布** | ❌ 未发布 | 发布为 `dsh-pseudo-vision` npm 包，支持 `dsh plugin add` 一行安装 |
-| **client 端增强** | ⚠️ 基础版 | 已有 settings 插件卡片；自动 composer 图片提示未做 |
 | **多语言 OCR 配置** | ✅ 已支持 | `langs` 配置项（默认 `chi_sim+eng`） |
 | **图像预缩放策略** | ✅ 已实现 | `ocrBudget` + smart resize + 小字自适应放大；`auto` 按原图像素数选择 normal/large |
 | **长截图 OCR** | ✅ 已实现 | 原图高度 > 3000px 时 2000px 分块、100px 重叠，块级预算预处理并合并边界 |
