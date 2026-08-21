@@ -2,6 +2,22 @@
 
 All notable changes to dsh-pseudo-vision are documented here.
 
+## [0.5.0] - 2026-08-21
+
+### Added
+- **Universal row+column pixel scan**: instead of scanning only red horizontal rows, the auto-bridge now scans every colour bucket from the colour-statistics classifier in both row and column directions. Layout cues such as horizontal separators, vertical sidebars, and coloured bands can now be surfaced regardless of hue.
+- **Background-bucket suppression**: buckets that dominate the image (share >= 30% from colour stats) are treated as background candidates. Rows/columns where a background bucket reaches >= 90% density are suppressed as pure background, while partial bands (e.g., 80%) still surface as structured layout cues.
+- **Shared 512px decode**: colour statistics and the universal scan now share a single downsampled raw buffer so both evidence steps observe identical pixels.
+- **Column focus for OCR retry (`focusX`)**: column hits from the universal scan are forwarded to the low-confidence OCR retry crop, enlarging horizontal padding around vertical separators or band boundaries.
+
+### Changed
+- `pixelScan` (single-target, red-by-default) is kept unchanged for the manual `vision_pixel_scan` tool; only the auto-bridge uses the new universal scan.
+- Cache pipeline version bumped so red-only scan results are not reused after upgrade.
+
+### Verification
+- `pnpm typecheck` and `pnpm test` pass (19/19).
+- Headless CLI comparison against `C:\Users\39795\Pictures\Screenshots` on `deepseek-official` / `deepseek-v4-flash` showed improved layout inference (colour bands and separators detected without requiring the model to run a second manual scan).
+
 ## [0.4.0] - 2026-08-21
 
 ### Added

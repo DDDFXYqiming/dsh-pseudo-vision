@@ -1,6 +1,6 @@
 {
   "name": "dsh-pseudo-vision",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Adds opt-in image-capable sibling routes for text-only providers and converts image blocks into budgeted, locally enhanced OCR, color-statistics, pixel-scan, and metadata evidence before delegation.",
   "type": "module",
   "main": "./lib/index.js",
