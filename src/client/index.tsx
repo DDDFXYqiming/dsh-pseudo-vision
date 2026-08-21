@@ -1,10 +1,9 @@
 /**
  * Client-side companion for dsh-pseudo-vision.
  *
- * Registers a settings plugin card ("Pseudo Vision") that shows the bridge
- * status and the local analysis options. Purely presentational — the bridge
- * itself is entirely server-side; this card just surfaces state and the
- * configuration knobs that are read from the same `llm-deepseek` namespace.
+ * Registers a compact settings plugin card ("Pseudo Vision") that shows the
+ * bridge status. The bridge itself is entirely server-side; configuration
+ * details remain in the README rather than crowding the Settings page.
  */
 
 import type { ClientContext } from "@deepseek-ai/dsh-client-runtime/client";
