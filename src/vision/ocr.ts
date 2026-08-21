@@ -10,7 +10,7 @@
  * to a position in the original image.
  */
 
-import { createWorker, type Worker } from 'tesseract.js';
+import { createWorker, PSM, type Worker } from 'tesseract.js';
 import sharp from 'sharp';
 
 const DEFAULT_LANGS = ['chi_sim+eng'] as const;
@@ -37,12 +37,53 @@ async function getWorker(langs: string): Promise<Worker> {
     return worker;
 }
 
+// Dedicated digit-verification worker. It is created lazily only when a
+// digit-critical token needs a second read and lives with its own locked
+// parameters (digit whitelist + single-line PSM), so the general-purpose
+// worker never sees its state mutated. Same engine, zero new models.
+let cachedDigitWorker: Worker | null = null;
+let cachedDigitLangs: string | null = null;
+
+// ASCII-only whitelist for digit-critical tokens (IP / URL / port). The point
+// is not to forbid letters — URL tokens need them — but to lock out the CJK
+// glyph space, which is the dominant noise source for chi_sim+eng on
+// terminal-style ASCII text.
+const DIGIT_WHITELIST =
+    '0123456789.:/-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
+
+async function getDigitWorker(langs: string): Promise<Worker> {
+    if (cachedDigitWorker && cachedDigitLangs === langs) return cachedDigitWorker;
+    if (cachedDigitWorker) {
+        await cachedDigitWorker.terminate();
+        cachedDigitWorker = null;
+        cachedDigitLangs = null;
+    }
+    const worker = await createWorker(langs);
+    await worker.setParameters({
+        tessedit_char_whitelist: DIGIT_WHITELIST,
+        tessedit_pageseg_mode: PSM.SINGLE_LINE,
+    });
+    cachedDigitWorker = worker;
+    cachedDigitLangs = langs;
+    return worker;
+}
+
+export interface OcrWord {
+    text: string;
+    /** Normalized word bounding box in [0,1], image-relative. */
+    bbox: { x1: number; y1: number; x2: number; y2: number };
+    /** Tesseract-reported confidence in [0, 100]. */
+    confidence: number;
+}
+
 export interface OcrLine {
     text: string;
     /** Normalised bounding box in [0,1], image-relative. */
     bbox: { x1: number; y1: number; x2: number; y2: number };
     /** Tesseract-reported confidence in [0, 100]. */
     confidence: number;
+    /** Word-level tokens (used by the digit verification pass). */
+    words: OcrWord[];
 }
 
 export interface OcrResult {
@@ -66,18 +107,87 @@ export interface OcrRetryOptions {
     focusY?: readonly number[];
     /** Optional normalized x positions from the column pixel scan. */
     focusX?: readonly number[];
+    /** Digit verification pass (default true). */
+    digitVerify?: boolean;
+    /** Maximum digit-critical tokens to re-verify per image/chunk. */
+    maxDigitFixes?: number;
 }
 
 export interface OcrRetry {
     region: NormalizedRegion;
     /** Whether a focus row from pixel scanning fell near this region. */
     pixelFocus: boolean;
+    /** Whether a focus column from pixel scanning fell near this region. */
+    pixelFocusX: boolean;
     result: OcrResult;
+}
+
+/** One accepted digit-token correction produced by the verification pass. */
+export interface DigitFix {
+    original: string;
+    replacement: string;
+    oldConfidence: number;
+    newConfidence: number;
+    bbox: OcrLine['bbox'];
+    lineIndex: number;
 }
 
 export interface OcrRetryResult {
     initial: OcrResult;
     retries: OcrRetry[];
+    digitFixes: DigitFix[];
+}
+
+/** IP v4 / URL / port / long-number tokens where digit errors hurt the most. */
+const DIGIT_CRITICAL_RE = /(\d{1,3}\.){3}\d{1,3}|https?:\/\/|:\d{2,5}(?!\d)|\d{4,}/i;
+
+/** True when the token carries digit-critical payload (IP, URL, port, number). */
+export function isDigitCriticalToken(text: string): boolean {
+    return DIGIT_CRITICAL_RE.test(text);
+}
+
+/**
+ * Acceptance rule for a digit re-read: same glyph count (targets 0↔6/9/8
+ * style confusions, rejects structural rewrites), strictly better confidence,
+ * and the text actually changed while still containing digits.
+ */
+export function shouldAcceptDigitFix(
+    oldText: string,
+    newText: string,
+    oldConfidence: number,
+    newConfidence: number,
+): boolean {
+    if (newText.length === 0) return false;
+    if (newText === oldText) return false;
+    if (newText.length !== oldText.length) return false;
+    if (!/\d/.test(newText)) return false;
+    return newConfidence >= oldConfidence + 5;
+}
+
+const TOKEN_PUNCTUATION = new Set(['.', '-', ':', '/', ';', ',']);
+
+/**
+ * Fuse a same-length re-read with the original token: punctuation positions
+ * keep the first-pass character (segmentation is usually right; glyph
+ * identity is what the first pass got wrong), everything else takes the
+ * higher-confidence re-read. `127-0.0.1` fused over `127.6.6.1` therefore
+ * yields `127.0.0.1`.
+ */
+export function fuseDigitReread(oldText: string, newText: string): string {
+    if (oldText.length !== newText.length) return newText;
+    let fused = '';
+    for (let i = 0; i < oldText.length; i += 1) {
+        const prev = oldText[i];
+        const next = newText[i];
+        if (prev === next) {
+            fused += prev;
+        } else if (TOKEN_PUNCTUATION.has(prev) && TOKEN_PUNCTUATION.has(next)) {
+            fused += prev;
+        } else {
+            fused += next;
+        }
+    }
+    return fused;
 }
 
 /**
@@ -103,6 +213,18 @@ export async function runOcr(
         .filter((line) => (line.text ?? '').trim().length > 0)
         .map((line) => {
             const bbox = line.bbox;
+            const words: OcrWord[] = (line.words ?? [])
+                .filter((word) => (word.text ?? '').trim().length > 0)
+                .map((word) => ({
+                    text: (word.text ?? '').trim(),
+                    bbox: {
+                        x1: word.bbox.x0 / width,
+                        y1: word.bbox.y0 / height,
+                        x2: word.bbox.x1 / width,
+                        y2: word.bbox.y1 / height,
+                    },
+                    confidence: word.confidence ?? 0,
+                }));
             return {
                 text: (line.text ?? '').trim(),
                 bbox: {
@@ -112,6 +234,7 @@ export async function runOcr(
                     y2: bbox.y1 / height,
                 },
                 confidence: line.confidence ?? 0,
+                words,
             };
         });
 
@@ -145,14 +268,6 @@ export function formatOcrBlock(result: OcrResult): string {
 }
 
 /**
- * 计算 OCR 结果的平均置信度（0-100）。
- */
-export function averageConfidence(result: OcrResult): number {
-    if (result.lines.length === 0) return 0;
-    return result.lines.reduce((sum, l) => sum + l.confidence, 0) / result.lines.length;
-}
-
-/**
  * 过滤低置信度行，返回这些行在原图中的归一化区域。
  */
 export function lowConfidenceRegions(
@@ -163,6 +278,104 @@ export function lowConfidenceRegions(
         .filter((l) => l.confidence < threshold)
         .sort((a, b) => a.confidence - b.confidence)
         .map((l) => l.bbox);
+}
+
+/**
+ * Re-read digit-critical tokens (IP/URL/port/number) from tight 3× crops
+ * with a locked digit whitelist on a dedicated worker. Same Tesseract
+ * engine, zero new models: we only ask the existing classifier a narrower
+ * question. Accepted corrections are applied in-place to the line text.
+ */
+async function verifyDigitTokens(
+    imageBytes: Buffer,
+    initial: OcrResult,
+    langs: string,
+    maxFixes: number,
+): Promise<DigitFix[]> {
+    const candidates: Array<{ word: OcrWord; lineIndex: number }> = [];
+    initial.lines.forEach((line, lineIndex) => {
+        for (const word of line.words) {
+            if (!isDigitCriticalToken(word.text)) continue;
+            if (word.confidence >= 92) continue;
+            candidates.push({ word, lineIndex });
+        }
+    });
+    if (candidates.length === 0) return [];
+    candidates.sort((a, b) => a.word.confidence - b.word.confidence);
+    const picked = candidates.slice(0, Math.max(0, maxFixes));
+    if (picked.length === 0) return [];
+
+    const meta = await sharp(imageBytes).metadata();
+    const width = meta.width ?? 1;
+    const height = meta.height ?? 1;
+    const digitWorker = await getDigitWorker(langs);
+
+    const fixes: DigitFix[] = [];
+    for (const { word, lineIndex } of picked) {
+        const left = Math.max(0, Math.floor(word.bbox.x1 * width) - 4);
+        const top = Math.max(0, Math.floor(word.bbox.y1 * height) - 4);
+        const right = Math.min(width, Math.ceil(word.bbox.x2 * width) + 4);
+        const bottom = Math.min(height, Math.ceil(word.bbox.y2 * height) + 4);
+        const cropWidth = Math.max(1, right - left);
+        const cropHeight = Math.max(1, bottom - top);
+        const crop = await sharp(imageBytes)
+            .extract({ left, top, width: cropWidth, height: cropHeight })
+            .resize({
+                width: Math.max(1, Math.round(cropWidth * 3)),
+                height: Math.max(1, Math.round(cropHeight * 3)),
+                fit: 'fill',
+                kernel: 'lanczos3',
+            })
+            .extend({
+                top: 10,
+                bottom: 10,
+                left: 10,
+                right: 10,
+                background: { r: 255, g: 255, b: 255, alpha: 1 },
+            })
+            .toBuffer();
+
+        const { data } = await digitWorker.recognize(crop);
+        const reread = (data.text ?? '').replace(/\s+/g, '').trim();
+        const newText = fuseDigitReread(word.text, reread);
+        const newConfidence = (data.blocks ?? [])
+            .flatMap((block) => block.paragraphs ?? [])
+            .flatMap((para) => para.lines ?? [])
+            .map((line) => line.confidence ?? 0)
+            .reduce((best, c) => Math.max(best, c), 0);
+        if (!shouldAcceptDigitFix(word.text, newText, word.confidence, newConfidence)) {
+            continue;
+        }
+        const line = initial.lines[lineIndex];
+        initial.lines[lineIndex] = {
+            ...line,
+            text: line.text.replace(word.text, newText),
+        };
+        // Keep fullText consistent with the corrected lines: apply the same
+        // first-occurrence replacement to the raw tesseract text.
+        initial.fullText = initial.fullText.replace(word.text, newText);
+        fixes.push({
+            original: word.text,
+            replacement: newText,
+            oldConfidence: word.confidence,
+            newConfidence,
+            bbox: word.bbox,
+            lineIndex,
+        });
+    }
+    return fixes;
+}
+
+/** Format the digit verification corrections as an evidence block. */
+export function formatDigitFixBlock(fixes: readonly DigitFix[]): string {
+    if (fixes.length === 0) return '';
+    const lines = fixes.map((fix) => {
+        const y = (fix.bbox.y1 + fix.bbox.y2) / 2;
+        const oldConf = Math.round(fix.oldConfidence);
+        const newConf = Math.round(fix.newConfidence);
+        return `  · y=${y.toFixed(3)} "${fix.original}" → "${fix.replacement}"（置信度 ${oldConf}→${newConf}）`;
+    });
+    return `[数字复核 ${fixes.length} 处]\n${lines.join('\n')}`;
 }
 
 /**
@@ -186,9 +399,16 @@ export async function ocrWithLowConfidenceRetry(
     const padding = Math.max(0, Math.floor(options.padding ?? 16));
     const focusY = options.focusY ?? [];
     const focusX = options.focusX ?? [];
+    const digitVerify = options.digitVerify ?? true;
+    const maxDigitFixes = Math.max(0, Math.floor(options.maxDigitFixes ?? 6));
     const initial = await runOcr(imageBytes, langs);
+
+    const digitFixes = digitVerify
+        ? await verifyDigitTokens(imageBytes, initial, langs, maxDigitFixes).catch(() => [])
+        : [];
+
     const regions = lowConfidenceRegions(initial, threshold).slice(0, maxRegions);
-    if (regions.length === 0) return { initial, retries: [] };
+    if (regions.length === 0) return { initial, retries: [], digitFixes };
 
     const meta = await sharp(imageBytes).metadata();
     const width = meta.width ?? 1;
@@ -230,10 +450,10 @@ export async function ocrWithLowConfidenceRetry(
             })
             .toBuffer();
         const result = await runOcr(crop, langs);
-        retries.push({ region, pixelFocus, result });
+        retries.push({ region, pixelFocus, pixelFocusX, result });
     }
 
-    return { initial, retries };
+    return { initial, retries, digitFixes };
 }
 
 /** Format only the extra readings produced by low-confidence retries. */
@@ -241,10 +461,14 @@ export function formatOcrRetryBlock(result: OcrRetryResult): string {
     if (result.retries.length === 0) return '';
     const lines = result.retries.map((retry, index) => {
         const { x1, y1, x2, y2 } = retry.region;
-        const focus = retry.pixelFocus ? '，命中像素扫描焦点' : '';
+        const focus = [
+            retry.pixelFocus ? '行' : null,
+            retry.pixelFocusX ? '列' : null,
+        ].filter(Boolean).join('·');
+        const focusNote = focus.length > 0 ? `，命中像素扫描${focus}焦点` : '';
         const text = retry.result.fullText.trim() || '未识别到文字';
         return `  · 区域 ${index + 1} x=${x1.toFixed(3)}-${x2.toFixed(3)} `
-            + `y=${y1.toFixed(3)}-${y2.toFixed(3)}${focus}：${text}`;
+            + `y=${y1.toFixed(3)}-${y2.toFixed(3)}${focusNote}：${text}`;
     });
     return `[OCR 低置信度重试 ${result.retries.length} 区域]\n${lines.join('\n')}`;
 }
@@ -257,5 +481,10 @@ export async function disposeOcr(): Promise<void> {
         await cachedWorker.terminate();
         cachedWorker = null;
         cachedLangs = null;
+    }
+    if (cachedDigitWorker) {
+        await cachedDigitWorker.terminate();
+        cachedDigitWorker = null;
+        cachedDigitLangs = null;
     }
 }

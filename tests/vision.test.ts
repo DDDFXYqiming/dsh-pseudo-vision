@@ -20,9 +20,13 @@ import {
     smartResize,
 } from '../src/vision/preprocess.ts';
 import {
-    averageConfidence,
+    formatDigitFixBlock,
     formatOcrRetryBlock,
+    fuseDigitReread,
+    isDigitCriticalToken,
     lowConfidenceRegions,
+    shouldAcceptDigitFix,
+    type DigitFix,
     type OcrResult,
 } from '../src/vision/ocr.ts';
 import { planChunkTops } from '../src/vision/chunk-ocr.ts';
@@ -278,15 +282,16 @@ test('dark-mode detection and low-confidence retry formatting are deterministic'
                 text: '低置信度',
                 confidence: 42,
                 bbox: { x1: 0.1, y1: 0.2, x2: 0.8, y2: 0.3 },
+                words: [],
             },
             {
                 text: '可靠文本',
                 confidence: 95,
                 bbox: { x1: 0.1, y1: 0.4, x2: 0.8, y2: 0.5 },
+                words: [],
             },
         ],
     };
-    assert.equal(averageConfidence(initial), 68.5);
     assert.deepEqual(lowConfidenceRegions(initial, 60), [initial.lines[0]?.bbox]);
 
     const block = formatOcrRetryBlock({
@@ -294,11 +299,12 @@ test('dark-mode detection and low-confidence retry formatting are deterministic'
         retries: [{
             region: initial.lines[0]!.bbox,
             pixelFocus: true,
+            pixelFocusX: false,
             result: { ...initial, fullText: '复核文本' },
         }],
     });
     assert.match(block, /低置信度重试 1 区域/);
-    assert.match(block, /命中像素扫描焦点/);
+    assert.match(block, /命中像素扫描行焦点/);
     assert.doesNotMatch(block, /\\\\n/);
 });
 
@@ -320,4 +326,67 @@ test('planChunkTops splits tall images', () => {
 
     // 非法 overlap（>= targetHeight 的一半）直接抛错，避免死循环。
     assert.throws(() => planChunkTops(5000, 2000, 1000), RangeError);
+});
+
+// ---------- Digit verification pass (v0.5.1) ----------
+
+test('isDigitCriticalToken targets IP/URL/port/number tokens', () => {
+    assert.equal(isDigitCriticalToken('127.6.6.1:3080'), true);
+    assert.equal(isDigitCriticalToken('http://127.0.0.1:3080'), true);
+    assert.equal(isDigitCriticalToken('127.0.0.1'), true);
+    assert.equal(isDigitCriticalToken(':3989'), true);
+    assert.equal(isDigitCriticalToken('39890'), true);
+    assert.equal(isDigitCriticalToken('管理员'), false);
+    assert.equal(isDigitCriticalToken('dsh'), false);
+    assert.equal(isDigitCriticalToken('v4-flash'), false);
+});
+
+test('shouldAcceptDigitFix only allows same-length confident rewrites', () => {
+    // 0↔6 confusion with a solid confidence gain: accepted.
+    assert.equal(shouldAcceptDigitFix('127.6.6.1:3080', '127.0.0.1:3080', 70, 90), true);
+    // Same text: nothing to fix.
+    assert.equal(shouldAcceptDigitFix('127.0.0.1:3080', '127.0.0.1:3080', 70, 95), false);
+    // Length changed (structural rewrite): rejected.
+    assert.equal(shouldAcceptDigitFix('39795>', '39795', 70, 95), false);
+    // Confidence did not improve enough: rejected.
+    assert.equal(shouldAcceptDigitFix('127.6.6.1:3080', '127.0.0.1:3080', 70, 72), false);
+    // No digits in replacement: rejected.
+    assert.equal(shouldAcceptDigitFix('3080', 'oooo', 70, 95), false);
+    // Empty replacement: rejected.
+    assert.equal(shouldAcceptDigitFix('3080', '', 70, 95), false);
+});
+
+test('fuseDigitReread keeps first-pass punctuation, takes re-read glyphs', () => {
+    // Re-read fixed the digits but misread the second dot as a hyphen:
+    // fusion must keep the original dot and take the corrected digits.
+    assert.equal(
+        fuseDigitReread('http://127.6.6.1:3080', 'http://127-0.0.1:3080'),
+        'http://127.0.0.1:3080',
+    );
+    // Pure digit corrections pass through untouched.
+    assert.equal(
+        fuseDigitReread('http://127.9.6.1:3689', 'http://127.0.0.1:3080'),
+        'http://127.0.0.1:3080',
+    );
+    // Identical re-read stays identical.
+    assert.equal(fuseDigitReread('3080', '3080'), '3080');
+    // Different lengths fall back to the re-read verbatim.
+    assert.equal(fuseDigitReread('39795>', '39795'), '39795');
+});
+
+test('formatDigitFixBlock renders corrections or stays empty', () => {
+    assert.equal(formatDigitFixBlock([]), '');
+
+    const fix: DigitFix = {
+        original: '127.6.6.1:3080',
+        replacement: '127.0.0.1:3080',
+        oldConfidence: 71.4,
+        newConfidence: 93.2,
+        bbox: { x1: 0.1, y1: 0.4, x2: 0.5, y2: 0.44 },
+        lineIndex: 3,
+    };
+    const block = formatDigitFixBlock([fix]);
+    assert.ok(block.startsWith('[数字复核 1 处]'));
+    assert.ok(block.includes('"127.6.6.1:3080" → "127.0.0.1:3080"'));
+    assert.ok(block.includes('71→93'));
 });
