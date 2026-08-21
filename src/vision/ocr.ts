@@ -62,8 +62,10 @@ export interface OcrRetryOptions {
     upscale?: number;
     /** Pixel padding around the OCR bounding box before cropping. */
     padding?: number;
-    /** Optional normalized y positions from the red-row pixel scan. */
+    /** Optional normalized y positions from the row pixel scan. */
     focusY?: readonly number[];
+    /** Optional normalized x positions from the column pixel scan. */
+    focusX?: readonly number[];
 }
 
 export interface OcrRetry {
@@ -183,6 +185,7 @@ export async function ocrWithLowConfidenceRetry(
     const upscale = Math.max(1, options.upscale ?? 2);
     const padding = Math.max(0, Math.floor(options.padding ?? 16));
     const focusY = options.focusY ?? [];
+    const focusX = options.focusX ?? [];
     const initial = await runOcr(imageBytes, langs);
     const regions = lowConfidenceRegions(initial, threshold).slice(0, maxRegions);
     if (regions.length === 0) return { initial, retries: [] };
@@ -196,11 +199,17 @@ export async function ocrWithLowConfidenceRetry(
         const pixelFocus = focusY.some((y) =>
             y >= region.y1 - 0.04 && y <= region.y2 + 0.04,
         );
-        const effectivePadding = pixelFocus ? Math.max(padding, 24) : padding;
-        const left = Math.max(0, Math.floor(region.x1 * width) - effectivePadding);
-        const top = Math.max(0, Math.floor(region.y1 * height) - effectivePadding);
-        const right = Math.min(width, Math.ceil(region.x2 * width) + effectivePadding);
-        const bottom = Math.min(height, Math.ceil(region.y2 * height) + effectivePadding);
+        const pixelFocusX = focusX.some((x) =>
+            x >= region.x1 - 0.04 && x <= region.x2 + 0.04,
+        );
+        // Focus hits enlarge the crop on the matching axis so separators or
+        // vertical band boundaries are not clipped during the retry read.
+        const padY = pixelFocus ? Math.max(padding, 24) : padding;
+        const padX = pixelFocusX ? Math.max(padding, 24) : padding;
+        const left = Math.max(0, Math.floor(region.x1 * width) - padX);
+        const top = Math.max(0, Math.floor(region.y1 * height) - padY);
+        const right = Math.min(width, Math.ceil(region.x2 * width) + padX);
+        const bottom = Math.min(height, Math.ceil(region.y2 * height) + padY);
         const cropWidth = Math.max(1, right - left);
         const cropHeight = Math.max(1, bottom - top);
 

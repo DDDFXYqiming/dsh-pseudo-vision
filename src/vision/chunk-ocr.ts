@@ -26,6 +26,8 @@ export interface ChunkOcrOptions {
     preprocessChunk?: ChunkPreprocessor;
     /** 来自原图像素扫描的归一化 y 焦点。 */
     focusY?: readonly number[];
+    /** 来自原图像素扫描的归一化 x 焦点（列）。切块只切 y 方向，x 原样透传。 */
+    focusX?: readonly number[];
     /** 低置信度行阈值，默认 60。 */
     confidenceThreshold?: number;
     /** 每块最多重试区域数，默认 3。 */
@@ -83,6 +85,7 @@ export async function chunkedOcr(
         langs,
         preprocessChunk,
         focusY = [],
+        focusX = [],
         confidenceThreshold = 60,
         maxRetryRegions = 3,
     } = options;
@@ -99,6 +102,7 @@ export async function chunkedOcr(
             threshold: confidenceThreshold,
             maxRegions: maxRetryRegions,
             focusY: localFocusY,
+            focusX,
         });
     };
 
