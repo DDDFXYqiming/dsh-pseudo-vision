@@ -25,40 +25,51 @@ export interface ColorStats {
     averageLuminance?: number;
 }
 
-interface BucketSpec {
-    name: string;
-    classify: (r: number, g: number, b: number) => boolean;
-}
+export const COLOR_BUCKET_NAMES = [
+    'white',
+    'black',
+    'grey',
+    'red',
+    'green',
+    'blue',
+    'yellow',
+    'cyan',
+    'magenta',
+] as const;
+
+export type ColorBucketName = (typeof COLOR_BUCKET_NAMES)[number];
 
 const MAX_DIMENSION = 512;
 
-const BUCKETS: BucketSpec[] = [
-    { name: 'white', classify: (r, g, b) => r > 230 && g > 230 && b > 230 },
-    { name: 'black', classify: (r, g, b) => r < 25 && g < 25 && b < 25 },
-    { name: 'grey', classify: (r, g, b) =>
-        Math.abs(r - g) < 15 && Math.abs(g - b) < 15 && Math.abs(r - b) < 15 &&
-        r > 25 && r < 230 },
-    { name: 'red', classify: (r, g, b) => r > g + 30 && r > b + 30 && r > 100 },
-    { name: 'green', classify: (r, g, b) => g > r + 30 && g > b + 30 && g > 100 },
-    { name: 'blue', classify: (r, g, b) => b > r + 30 && b > g + 30 && b > 100 },
-    { name: 'yellow', classify: (r, g, b) => r > 180 && g > 180 && b < 100 },
-    { name: 'cyan', classify: (r, g, b) => g > 180 && b > 180 && r < 100 },
-    { name: 'magenta', classify: (r, g, b) => r > 180 && b > 180 && g < 100 },
-];
+/** Classify one RGB pixel into a coarse bucket name, or 'other'. */
+export function classifyPixel(r: number, g: number, b: number): string {
+    if (r > 230 && g > 230 && b > 230) return 'white';
+    if (r < 25 && g < 25 && b < 25) return 'black';
+    if (Math.abs(r - g) < 15 && Math.abs(g - b) < 15 && Math.abs(r - b) < 15
+        && r > 25 && r < 230) return 'grey';
+    if (r > g + 30 && r > b + 30 && r > 100) return 'red';
+    if (g > r + 30 && g > b + 30 && g > 100) return 'green';
+    if (b > r + 30 && b > g + 30 && b > 100) return 'blue';
+    if (r > 180 && g > 180 && b < 100) return 'yellow';
+    if (g > 180 && b > 180 && r < 100) return 'cyan';
+    if (r > 180 && b > 180 && g < 100) return 'magenta';
+    return 'other';
+}
+
+export interface DecodedRaw {
+    data: Buffer;
+    width: number;
+    height: number;
+    channels: number;
+}
 
 /**
- * Compute colour-bucket shares for an image. Downsamples to MAX_DIMENSION on
- * the longer side first so we never iterate > ~512×512 pixels even for
- * very large source images.
+ * Compute colour-bucket shares from an ALREADY downsampled raw buffer.
+ * Used by the bridge so colour statistics and the universal pixel scan
+ * observe the exact same pixels (one resize, consistent bucketing).
  */
-export async function computeColorStats(imageBytes: Buffer): Promise<ColorStats> {
-    const { data, info } = await sharp(imageBytes)
-        .resize({ width: MAX_DIMENSION, height: MAX_DIMENSION, fit: 'inside' })
-        .removeAlpha()
-        .raw()
-        .toBuffer({ resolveWithObject: true });
-
-    const { width, height, channels } = info;
+export async function colorStatsFromRaw(raw: DecodedRaw): Promise<ColorStats> {
+    const { data, width, height, channels } = raw;
     const totalPixels = width * height;
     const counts = new Map<string, number>();
     let luminanceSum = 0;
@@ -69,23 +80,14 @@ export async function computeColorStats(imageBytes: Buffer): Promise<ColorStats>
         const b = data[i + 2] ?? 0;
         luminanceSum += 0.2126 * r + 0.7152 * g + 0.0722 * b;
 
-        let matched = false;
-        for (const bucket of BUCKETS) {
-            if (bucket.classify(r, g, b)) {
-                counts.set(bucket.name, (counts.get(bucket.name) ?? 0) + 1);
-                matched = true;
-                break;
-            }
-        }
-        if (!matched) {
-            counts.set('other', (counts.get('other') ?? 0) + 1);
-        }
+        const bucket = classifyPixel(r, g, b);
+        counts.set(bucket, (counts.get(bucket) ?? 0) + 1);
     }
 
     const buckets: ColorBucket[] = [];
-    for (const spec of BUCKETS) {
-        const pixels = counts.get(spec.name) ?? 0;
-        buckets.push({ name: spec.name, share: pixels / totalPixels, pixels });
+    for (const name of COLOR_BUCKET_NAMES) {
+        const pixels = counts.get(name) ?? 0;
+        buckets.push({ name, share: pixels / totalPixels, pixels });
     }
     const otherPixels = counts.get('other') ?? 0;
     if (otherPixels > 0) {
@@ -99,6 +101,34 @@ export async function computeColorStats(imageBytes: Buffer): Promise<ColorStats>
         buckets,
         averageLuminance: luminanceSum / Math.max(1, totalPixels),
     };
+}
+
+/**
+ * Downsample the image to MAX_DIMENSION and return raw + colour stats.
+ * The raw buffer is shared with the pixel scanner so both see the same pixels.
+ */
+export async function decodeAndColorStats(imageBytes: Buffer): Promise<{
+    raw: DecodedRaw;
+    stats: ColorStats;
+}> {
+    const { data, info } = await sharp(imageBytes)
+        .resize({ width: MAX_DIMENSION, height: MAX_DIMENSION, fit: 'inside' })
+        .removeAlpha()
+        .raw()
+        .toBuffer({ resolveWithObject: true });
+    const raw = { data: data as Buffer, width: info.width, height: info.height, channels: info.channels };
+    const stats = await colorStatsFromRaw(raw);
+    return { raw, stats };
+}
+
+/**
+ * Compute colour-bucket shares for an image. Downsamples to MAX_DIMENSION on
+ * the longer side first so we never iterate > ~512×512 pixels even for
+ * very large source images.
+ */
+export async function computeColorStats(imageBytes: Buffer): Promise<ColorStats> {
+    const data = await decodeAndColorStats(imageBytes);
+    return data.stats;
 }
 
 /**

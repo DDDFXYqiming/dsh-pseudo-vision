@@ -22,14 +22,20 @@ import { join } from 'node:path';
 
 import sharp from 'sharp';
 
-import { computeColorStats, formatColorStatsBlock } from './vision/color-stats.js';
+import {
+    decodeAndColorStats,
+    formatColorStatsBlock,
+} from './vision/color-stats.js';
 import { readMeta, formatMetaBlock } from './vision/meta.js';
 import {
     formatOcrBlock,
     formatOcrRetryBlock,
     ocrWithLowConfidenceRetry,
 } from './vision/ocr.js';
-import { pixelScan, formatPixelScanBlock } from './vision/pixel-scan.js';
+import {
+    formatUniversalScanBlock,
+    pixelScanUniversal,
+} from './vision/pixel-scan.js';
 import { chunkedOcr, type ChunkOcrResult } from './vision/chunk-ocr.js';
 import {
     BUDGETS,
@@ -90,9 +96,12 @@ const AUTO_LARGE_THRESHOLD = 2_100_000;
 /**
  * Cache namespace for every OCR-affecting knob. Keep old cache files on disk,
  * but never let a result made by the old fixed pipeline satisfy a new request.
+ * v2: universal row+col pixel scan (non-background buckets, focusX) joined
+ * the evidence set, so results produced by the red-only scan must not be
+ * served from cache.
  */
 export const OCR_CACHE_PIPELINE =
-    'ocr-v2-min224-factor28-up800-border10-dark-enhance-chunk3000-2000-100-retry60-3x2';
+    'ocr-v2-min224-factor28-up800-border10-dark-enhance-chunk3000-2000-100-retry60-3x2-scan-rowcol-v1';
 
 export function buildVisionCacheKey(
     sha256: string,
@@ -153,16 +162,13 @@ export async function imageToText(
         }
     }
 
-    // 颜色统计 / 像素扫描 / 元信息用【原图】字节（颜色分析需要真实像素）。
-    // 深色模式判定复用同一份颜色统计，preprocessForOcr 因此拿到 override，
-    // 内部不再重复检测。
-    const [colors, scan, meta] = await Promise.all([
-        computeColorStats(image.bytes).catch((error) => {
-            console.error('[dsh-pseudo-vision] color stats failed:', error);
-            return null;
-        }),
-        pixelScan(image.bytes, { target: '#ff0000' }).catch((error) => {
-            console.error('[dsh-pseudo-vision] pixel scan failed:', error);
+    // 颜色统计 / 像素扫描 / 元信息：颜色与扫描共用【同一次 512px 降采样】，
+    // 保证两阶段看到的是同一张图；元信息仍读原图字节。
+    // 背景桶 = 颜色统计中 share >= 30% 的桶，通用扫描对其使用 [threshold, cap)
+    // 区间上报，纯背景带被抑制而交替条纹仍可见。
+    const [decoded, meta] = await Promise.all([
+        decodeAndColorStats(image.bytes).catch((error) => {
+            console.error('[dsh-pseudo-vision] color decode failed:', error);
             return null;
         }),
         readMeta(image.bytes).catch((error) => {
@@ -171,8 +177,31 @@ export async function imageToText(
         }),
     ]);
 
+    let colors: import('./vision/color-stats.js').ColorStats | null = null;
+    let scan: import('./vision/pixel-scan.js').UniversalScanResult | null = null;
+    if (decoded !== null) {
+        colors = decoded.stats;
+        const backgroundBuckets = decoded.stats.buckets
+            .filter((bucket) => bucket.share >= 0.30)
+            .map((bucket) => bucket.name);
+        scan = await pixelScanUniversal(decoded.raw, {
+            backgroundBuckets,
+            threshold: 0.15,
+            backgroundCap: 0.9,
+            maxHitsPerBucket: 5,
+        }).catch((error) => {
+            console.error('[dsh-pseudo-vision] pixel scan failed:', error);
+            return null;
+        });
+    }
+
     const darkMode = colors !== null && isDarkModeFromStats(colors);
-    const focusY = scan?.rows.map((row) => row.y / Math.max(1, scan.height)) ?? [];
+    const focusY = scan?.hits
+        .filter((hit) => hit.axis === 'row')
+        .map((hit) => hit.pos) ?? [];
+    const focusX = scan?.hits
+        .filter((hit) => hit.axis === 'col')
+        .map((hit) => hit.pos) ?? [];
 
     let ocrBlock: string | null = null;
     let chunkCount = 0;
@@ -191,6 +220,7 @@ export async function imageToText(
             overlap: CHUNK_OVERLAP,
             langs,
             focusY,
+            focusX,
             confidenceThreshold: OCR_CONFIDENCE_THRESHOLD,
             maxRetryRegions: OCR_MAX_RETRY_REGIONS,
             preprocessChunk: async (bytes) => (
@@ -227,6 +257,7 @@ export async function imageToText(
                 maxRegions: OCR_MAX_RETRY_REGIONS,
                 upscale: OCR_RETRY_UPSCALE,
                 focusY,
+                focusX,
             },
         ).catch((error) => {
             console.error('[dsh-pseudo-vision] OCR failed:', error);
@@ -249,7 +280,7 @@ export async function imageToText(
     );
     if (ocrBlock !== null) blocks.push(ocrBlock);
     if (colors !== null) blocks.push(formatColorStatsBlock(colors));
-    if (scan !== null) blocks.push(formatPixelScanBlock(scan));
+    if (scan !== null) blocks.push(formatUniversalScanBlock(scan));
     if (meta !== null) blocks.push(formatMetaBlock(meta));
     const text = blocks.join('\n\n');
 
@@ -264,6 +295,8 @@ export async function imageToText(
             chunkCount,
             retryCount,
             ocrBytes,
+            scanRowHits: scan?.rowHitCount ?? 0,
+            scanColHits: scan?.colHitCount ?? 0,
         }),
         'utf-8',
     ).catch(() => undefined);

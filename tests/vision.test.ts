@@ -10,9 +10,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { computeColorStats, formatColorStatsBlock } from '../src/vision/color-stats.ts';
+import { computeColorStats, decodeAndColorStats, formatColorStatsBlock } from '../src/vision/color-stats.ts';
 import { readMeta, formatMetaBlock } from '../src/vision/meta.ts';
-import { pixelScan, formatPixelScanBlock } from '../src/vision/pixel-scan.ts';
+import { pixelScan, formatPixelScanBlock, pixelScanUniversal, formatUniversalScanBlock } from '../src/vision/pixel-scan.ts';
 import {
     budgetResize,
     isDarkModeFromStats,
@@ -79,6 +79,99 @@ test('pixel scan accepts named red and finds a dense horizontal line', async () 
 
     assert.ok(result.rows.length > 0);
     assert.ok((result.peak?.density ?? 0) > 0.5);
+});
+
+// ---------- Universal row+column scan (v0.5.0) ----------
+
+async function svgToUniversal(
+    svg: string,
+    backgroundBuckets: string[] = [],
+): Promise<ReturnType<typeof pixelScanUniversal>> {
+    const sharpModule = await tryImport<typeof import('sharp')>('sharp');
+    if (!sharpModule) throw new Error('sharp not available');
+    const sharp = sharpModule.default;
+    const bytes = await sharp(Buffer.from(svg)).png().toBuffer();
+    const decoded = await decodeAndColorStats(bytes);
+    return pixelScanUniversal(decoded.raw, {
+        backgroundBuckets,
+        threshold: 0.15,
+        backgroundCap: 0.9,
+        maxHitsPerBucket: 5,
+    });
+}
+
+test('universal scan suppresses pure background rows and columns', async () => {
+    const sharpModule = await tryImport<typeof import('sharp')>('sharp');
+    if (!sharpModule) return;
+
+    const result = await svgToUniversal(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">'
+        + '<rect width="100" height="100" fill="white"/>'
+        + '</svg>',
+        ['white'],
+    );
+
+    assert.equal(result.rowHitCount, 0);
+    assert.equal(result.colHitCount, 0);
+    assert.ok(formatUniversalScanBlock(result).includes('无非背景高密度行/列'));
+});
+
+test('universal scan finds non-background horizontal and vertical bands', async () => {
+    const result = await svgToUniversal(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">'
+        + '<rect width="100" height="100" fill="white"/>'
+        + '<rect x="0" y="40" width="100" height="10" fill="red"/>'
+        + '<rect x="40" y="0" width="10" height="100" fill="blue"/>'
+        + '</svg>',
+        ['white'],
+    );
+
+    const rows = result.hits.filter((h) => h.axis === 'row');
+    const cols = result.hits.filter((h) => h.axis === 'col');
+    assert.ok(rows.length > 0, 'red horizontal band should produce row hits');
+    assert.ok(rows.some((h) => h.bucket === 'red'), 'red row hit expected');
+    assert.ok(cols.length > 0, 'blue vertical band should produce column hits');
+    assert.ok(cols.some((h) => h.bucket === 'blue'), 'blue column hit expected');
+});
+
+test('universal scan suppresses pure background buckets and keeps partial bands', async () => {
+    // A full grey image: every row/column is 100% grey; with grey marked as
+    // background, nothing should surface.
+    const fullGrey = await svgToUniversal(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">'
+        + '<rect width="100" height="100" fill="#cccccc"/>'
+        + '</svg>',
+        ['grey'],
+    );
+    assert.equal(fullGrey.hits.length, 0, 'full grey background should be fully suppressed');
+
+    // A grey band covering only 80% of the row width yields ~80% density,
+    // which is below the 0.90 background cap and above the 0.15 threshold.
+    const partial = await svgToUniversal(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">'
+        + '<rect width="100" height="100" fill="white"/>'
+        + '<rect x="0" y="20" width="80" height="60" fill="#cccccc"/>'
+        + '</svg>',
+        ['grey'],
+    );
+    const partialRows = partial.hits.filter((h) => h.axis === 'row' && h.bucket === 'grey');
+    assert.ok(partialRows.length > 0, 'partial grey band should still surface');
+});
+
+test('universal scan block formats row and column hits together', async () => {
+    const result = await svgToUniversal(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">'
+        + '<rect width="100" height="100" fill="black"/>'
+        + '<rect x="0" y="45" width="100" height="10" fill="green"/>'
+        + '<rect x="45" y="0" width="10" height="100" fill="cyan"/>'
+        + '</svg>',
+        ['black'],
+    );
+
+    const block = formatUniversalScanBlock(result);
+    assert.ok(block.includes('行'), 'block should contain row hits');
+    assert.ok(block.includes('列'), 'block should contain column hits');
+    assert.ok(block.includes('green') || block.includes('cyan'), 'non-background buckets reported');
 });
 
 test('meta exposes dimensions and samples', async () => {
