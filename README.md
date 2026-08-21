@@ -1,3 +1,5 @@
+简体中文 | [English](README.en.md)
+
 # dsh-pseudo-vision
 
 > 给 DeepSeek Harness 的 text-only provider 装上"工具层视觉"：把图片在落地到模型前，自动拆解成 OCR 文字 + 颜色统计 + 像素扫描 + 元信息，让任意纯文本模型也能"看图"。
