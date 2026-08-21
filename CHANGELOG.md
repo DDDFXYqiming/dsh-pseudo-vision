@@ -2,6 +2,24 @@
 
 All notable changes to dsh-pseudo-vision are documented here.
 
+## [0.5.1] - 2026-08-21
+
+### Added
+- **Digit verification pass**: after the first OCR pass, digit-critical tokens (IPv4 / URL / port / long numbers) are re-read from tight 3× crops with a locked ASCII whitelist and single-line PSM on a dedicated Tesseract worker. Same engine, zero new models. Accepted corrections (same glyph count + strictly higher confidence, punctuation-preserving fusion) are applied in-place to the OCR line text **and** `fullText`, and a `[数字复核 N 处]` evidence block lists every `原 → 新` fix with confidences so the model can see what changed.
+- Corrections survive both pipelines: single-image and chunked long-screenshot OCR carry and merge digit fixes.
+- The manual `vision_ocr` tool now runs the same full pipeline (low-confidence retry + digit verification) instead of a raw single pass, so tool-call evidence matches the auto-bridge quality.
+- Low-confidence retry blocks now surface column-focus hits (`命中像素扫描列焦点`) alongside row hits.
+
+### Removed
+- Dead `averageConfidence` export (test-only usage), stale `SKILL.md` / `assets/readme` entries from the npm `files` manifest.
+
+### Design guardrails
+- No new models or dependencies (user red line: fast, strong, model-free). The RapidOCR / PaddleOCR ONNX optional engine idea is recorded in the roadmap as deferred by user decision.
+
+### Verification
+- `pnpm check` green (typecheck + 23 tests + build).
+- Headless CLI retest on the PowerShell screenshot (deepseek-v4-flash): both loopback URLs previously misread as `127.6.6.1:3080` / `127.9.6.1:3689` (conf 34/38) are corrected in-place to `http://127.0.0.1:3080` (conf 66/85); the model now cites the correct URL verbatim and explicitly attributes the correction to the 3× crop re-OCR evidence block. See `work/pseudo-vision-test/v051-digit/`.
+
 ## [0.5.0] - 2026-08-21
 
 ### Added
