@@ -17,6 +17,7 @@ import {
     type LlmProviderInfo,
     type LlmResolvedModelInfo,
     type LlmRuntime,
+    type PreparedAdapterCall,
     type ResolvedRetryPolicy,
     type StreamChunk,
 } from "@deepseek-ai/dsh-llm";
@@ -125,6 +126,27 @@ export class ProviderVisionBridgeAdapter extends LlmAdapter {
             ...resolved,
             provider,
             inputModalities: IMAGE_INPUT,
+        };
+    }
+
+    /**
+     * [v0.5.3] dsh 0.1.1-rc.2 宿主在 adapterStream 中无条件调用 `adapter.prepareCall`；
+     * 抽象基类 `LlmAdapter` 不提供默认实现，未重写即抛 "is not a function"。
+     * 这里**不委托**被包装的运行时（其 `prepareCall` 在 dsh 的嵌套模块解析下可能取到旧版
+     * 实例而缺失该方法），而是自取 `this.resolveModel` 拿到带 image modalities 的元数据，
+     * dispatch 用 bridge 自己的 `this.stream()`（已含伪视觉变换）——这是把 prepareCall
+     * 退化为"解析 + dispatch 闭包"的最小契约实现，对宿主完全透明。与 `PseudoVisionBridgeAdapter`
+     * 中 prepareCall 的语义保持一致：sibling route 仅作为文本 only provider 的图像入口。
+     */
+    async prepareCall(
+        provider: string,
+        model: string,
+        signal?: AbortSignal,
+    ): Promise<PreparedAdapterCall> {
+        const resolved = await this.resolveModel(provider, model, signal);
+        return {
+            model: resolved,
+            stream: (options: GenerateOptions) => this.stream(options),
         };
     }
 

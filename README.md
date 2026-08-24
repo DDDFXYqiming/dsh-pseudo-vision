@@ -102,11 +102,10 @@ dsh plugin --profile web add <本机绝对路径>
 
 | dsh 版本 | 状态 |
 |---|---|
-| 0.1.0-rc.7 / 0.1.0-rc.8 | ✅ 实机验证通过 |
-| **0.1.1-rc.2** | **✅ 实机验证通过（v0.5.2+：override prepareCall 适配新版宿主接口）** |
-| 0.1.0-rc.9 / 0.1.1-rc.1 等中间版本 | ⚠️ 结构兼容（未实机验证） |
+| **0.1.1-rc.2** | **✅ 唯一目标版本（v0.5.3+：dev/peer 依赖对齐；两个 bridge adapter 均实现 `prepareCall`）** |
+| 0.1.0-rc.7 / 0.1.0-rc.8 | ❌ 不再支持（依赖已随 v0.5.3 升级） |
 
-**dsh 0.1.1-rc.2 升级注意**：宿主对 `LlmAdapter` 增加了强制 `prepareCall` 调用，v0.5.1 及更早版本运行会抛 `this[#deepseek].prepareCall is not a function`。请升级到 **v0.5.2+**。
+**v0.5.3 修复**：dsh 0.1.1-rc.2 宿主对所有 `LlmAdapter` 无条件调用 `prepareCall`，v0.5.2 只给 `PseudoVisionBridgeAdapter` 实现了该方法，`dsh-pseudo-vision/<provider>` sibling 路由会抛 `registration.adapter.prepareCall is not a function`；v0.5.3 为 `ProviderVisionBridgeAdapter` 补齐同名实现并统一依赖到 0.1.1-rc.2。
 
 ## 权限
 

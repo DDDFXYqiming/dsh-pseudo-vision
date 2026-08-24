@@ -7,6 +7,15 @@ All notable changes to dsh-pseudo-vision are documented here.
 ### Removed
 - Removed the browser client bundle and its Settings → Plugins configuration card. The plugin has no interactive settings, remains visible in the installed-plugin inventory, and keeps provider allowlists in configuration files.
 
+## [0.5.3] - 2026-08-21
+
+### Fixed
+- **`registration.adapter.prepareCall is not a function` on sibling routes**: dsh 0.1.1-rc.2 calls `adapter.prepareCall` unconditionally; `ProviderVisionBridgeAdapter` lacked the method while `PseudoVisionBridgeAdapter` had it. Added the same resolve-model + stream-closure implementation to the sibling bridge.
+- Aligned all `@deepseek-ai/dsh-*` dev/peer dependencies to `0.1.1-rc.2` (current host only; `0.1.0-rc.7/8` no longer supported).
+
+### Verification
+- `pnpm typecheck` + `pnpm test` (23/23) + `pnpm build` green; `ProviderVisionBridgeAdapter.prototype.prepareCall` present in the built bundle.
+
 ## [0.5.1] - 2026-08-21
 
 ### Added
