@@ -115,7 +115,16 @@ export async function budgetResize(
 }
 
 /**
- * OCR 增强：灰度 → （深色模式时）反色 → 对比度拉伸 → 轻锐化。
+ * OCR 增强：灰度 → （深色模式时）反色 → 对比度拉伸 → 轻降噪 → 轻锐化。
+ *
+ * 2026-08-26 调参依据（tesseract 官方 ImproveQuality + 社区实测）：
+ * - 过度处理有害：tesseract 内部自带 Otsu 二值化且使用梯度信息，
+ *   normalize()+sharpen(0.8) 对浅色 UI 截图会把抗锯齿边缘放大成噪点、
+ *   小字号 CJK 笔画粘连（"插"→"播" 类错误加剧）。
+ * - 顺序敏感：median 必须在 normalize 之后——先拉伸对比度（浅灰 #666
+ *   小字变深）再做 3×3 中值降噪，否则细笔画先被平滑抹平、整行漏检
+ *   （实测：median 前置导致缩放图上"通用设置/模型"行消失）。
+ * - 二值化交给 tesseract 内部 Otsu，不做外部二值化。
  */
 export async function enhanceForOcr(
     imageBytes: Buffer,
@@ -128,7 +137,8 @@ export async function enhanceForOcr(
     }
     return pipeline
         .normalize()
-        .sharpen({ sigma: 0.8 })
+        .median(3)
+        .sharpen({ sigma: 0.3 })
         .toBuffer();
 }
 

@@ -11,3 +11,7 @@ coverage/
 dist/
 build/
 tests/.fixtures/*.traineddata
+
+tests/.fixtures/*.traineddata
+*.traineddata
+lib.bak-*/

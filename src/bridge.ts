@@ -88,8 +88,11 @@ const CHUNK_HEIGHT_THRESHOLD = 3000;
 const CHUNK_TARGET_HEIGHT = 2000;
 const CHUNK_OVERLAP = 100;
 const OCR_CONFIDENCE_THRESHOLD = 60;
-const OCR_MAX_RETRY_REGIONS = 3;
-const OCR_RETRY_UPSCALE = 2;
+// 2026-08-26: 3→8 regions (icon noise lines no longer exhaust the budget —
+// lowConfidenceRegions now ranks text-like lines first) and 2→3× upscale
+// (small CJK UI glyphs need ≥ ~35-40px height per tesseract best practice).
+const OCR_MAX_RETRY_REGIONS = 8;
+const OCR_RETRY_UPSCALE = 3;
 
 /** 'auto' 预算下超过该像素数切到 large（>210 万像素）。 */
 const AUTO_LARGE_THRESHOLD = 2_100_000;
@@ -102,9 +105,14 @@ const AUTO_LARGE_THRESHOLD = 2_100_000;
  * served from cache.
  * v3: digit verification pass (whitelist re-OCR of IP/URL/port tokens)
  * corrects OCR line text, so pre-digit-pass cache entries are stale.
+ * v4 (2026-08-26): CJK post-process (space merge + leading icon strip),
+ * retry replace-main (higher-confidence rereads overwrite the first pass),
+ * text-like line priority in low-confidence regions, PSM.SINGLE_BLOCK retry
+ * crops, sharpen 0.8→0.3 + median(3) after normalize, maxRegions 3→8 and
+ * upscale 2→3. Bump again whenever any of these knobs changes.
  */
 export const OCR_CACHE_PIPELINE =
-    'ocr-v3-min224-factor28-up800-border10-dark-enhance-chunk3000-2000-100-retry60-3x2-scan-rowcol-v1-digitverify-v1';
+    'ocr-v5-min224-factor28-up800-border10-dark-enhance-chunk3000-2000-100-retry60-8x3-cjkfix-replacemain-textfirst-psm6num-scan-rowcol-v1-digitverify-v1';
 
 export function buildVisionCacheKey(
     sha256: string,
