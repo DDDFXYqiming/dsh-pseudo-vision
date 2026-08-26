@@ -126,6 +126,7 @@ export class ProviderVisionBridgeAdapter extends LlmAdapter {
             ...resolved,
             provider,
             inputModalities: IMAGE_INPUT,
+            imagePixelBudget: resolved.imagePixelBudget ?? 64e6,
         };
     }
 

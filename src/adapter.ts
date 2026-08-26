@@ -64,6 +64,7 @@ function withImageInput(model: LlmModelInfo): LlmModelInfo {
     return {
         ...model,
         inputModalities: IMAGE_INPUT,
+        imagePixelBudget: model.imagePixelBudget ?? 64e6,
         description: PSEUDO_VISION_DESCRIPTION,
     };
 }
@@ -167,6 +168,7 @@ export class PseudoVisionBridgeAdapter extends LlmAdapter {
         return {
             ...resolved,
             inputModalities: IMAGE_INPUT,
+            imagePixelBudget: resolved.imagePixelBudget ?? 64e6,
             description: PSEUDO_VISION_DESCRIPTION,
         };
     }
