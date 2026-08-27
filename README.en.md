@@ -21,7 +21,7 @@
 
 ### OCR pipeline (v5)
 
-1. **Preprocessing**: budget resize (small/normal/large/mega, 28-grid snap) → dark-mode detection (no inversion on light themes) → greyscale → contrast stretch → 3×3 median denoise → light sharpen (σ0.3) → white border
+1. **Preprocessing**: budget resize (small/normal/large/mega, 28-grid snap) → dark-mode detection (no inversion on light themes) → greyscale → contrast stretch → salt-pepper detection (3×3 median denoise only when noise is present; clean images skip it so 1px thin strokes aren't erased) → light sharpen (σ0.3) → white border
 2. **First pass**: full-page tesseract recognition with per-line confidence; non-text blocks (image/separator) filtered
 3. **Low-confidence retry**: up to 8 regions, **text-like lines ranked first** (icon noise lines no longer exhaust the budget); crop + 3× Lanczos upscale + single-block mode (PSM 6) re-read; **higher-confidence re-reads replace the main line** (evidence block still emitted)
 4. **CJK post-process**: inter-character space merge (`通 知` → `通知`), leading icon symbol strip
