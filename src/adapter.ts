@@ -60,11 +60,20 @@ const IMAGE_INPUT = ["text", "image"] as const;
 /** Model-selector hint shown for every model served by the bridge. */
 export const PSEUDO_VISION_DESCRIPTION = "图片会在发送前由 dsh-pseudo-vision 转换为本地视觉文字";
 
+/**
+ * 宿主准入用的图片像素预算默认值（v0.5.4）。
+ * 64M（≈8000²）会让宿主原样放行超大图，本地 OCR 产出的证据文本可爆上下文；
+ * 1M 又会先被宿主降采样、毁掉长截图分块 OCR 的小字。取 16M（4096²）——
+ * 与本地 `mega` OCR 档对齐，仍允许 3000px+ 长图走分块管线。
+ * 证据文本另有 MAX_EVIDENCE_CHARS 封顶（见 bridge.ts）。
+ */
+export const DEFAULT_IMAGE_PIXEL_BUDGET = 16_000_000;
+
 function withImageInput(model: LlmModelInfo): LlmModelInfo {
     return {
         ...model,
         inputModalities: IMAGE_INPUT,
-        imagePixelBudget: model.imagePixelBudget ?? 64e6,
+        imagePixelBudget: model.imagePixelBudget ?? DEFAULT_IMAGE_PIXEL_BUDGET,
         description: PSEUDO_VISION_DESCRIPTION,
     };
 }
@@ -168,7 +177,7 @@ export class PseudoVisionBridgeAdapter extends LlmAdapter {
         return {
             ...resolved,
             inputModalities: IMAGE_INPUT,
-            imagePixelBudget: resolved.imagePixelBudget ?? 64e6,
+            imagePixelBudget: resolved.imagePixelBudget ?? DEFAULT_IMAGE_PIXEL_BUDGET,
             description: PSEUDO_VISION_DESCRIPTION,
         };
     }

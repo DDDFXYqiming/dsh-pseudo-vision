@@ -98,6 +98,21 @@ const OCR_RETRY_UPSCALE = 3;
 const AUTO_LARGE_THRESHOLD = 2_100_000;
 
 /**
+ * 证据文本封顶（v0.5.4）：本地管线允许 16M 像素的图，但 OCR 全文可能
+ * 达几万字把上下文撑爆。返回给模型的证据统一截断到约 8K tokens
+ * （32K 字符，按 CJK≈1 token/字保守估），并显式标注被截断。
+ */
+export const MAX_EVIDENCE_CHARS = 32_000;
+
+export function capEvidence(text: string): string {
+    if (text.length <= MAX_EVIDENCE_CHARS) return text;
+    return (
+        text.slice(0, MAX_EVIDENCE_CHARS)
+        + `\n[证据已截断：${text.length} 字符 > ${MAX_EVIDENCE_CHARS}（约 ${Math.ceil(text.length / 4)} tokens），仅保留前 ${MAX_EVIDENCE_CHARS} 字符]`
+    );
+}
+
+/**
  * Cache namespace for every OCR-affecting knob. Keep old cache files on disk,
  * but never let a result made by the old fixed pipeline satisfy a new request.
  * v2: universal row+col pixel scan (non-background buckets, focusX) joined
@@ -167,7 +182,8 @@ export async function imageToText(
     if (!options.bypassCache) {
         try {
             const cached = JSON.parse(await readFile(cachePath, 'utf-8')) as CacheEntry;
-            return cached.text;
+            // 缓存命中同样过封顶（旧缓存条目可能由封顶前的管线产出）。
+            return capEvidence(cached.text);
         } catch {
             // fall through to recompute
         }
@@ -215,6 +231,7 @@ export async function imageToText(
         .map((hit) => hit.pos) ?? [];
 
     let ocrBlock: string | null = null;
+    let ocrError: string | null = null;
     let chunkCount = 0;
     let retryCount = 0;
     let ocrWidth = origWidth;
@@ -239,6 +256,8 @@ export async function imageToText(
             ).bytes,
         }).catch((error) => {
             console.error('[dsh-pseudo-vision] chunked OCR failed:', error);
+            // 失败必须可见：证据块会带上失败原因，模型不会误判"图里没文字"。
+            ocrError = String((error as Error)?.message ?? error);
             return null;
         });
         if (chunked !== null) {
@@ -275,6 +294,8 @@ export async function imageToText(
             },
         ).catch((error) => {
             console.error('[dsh-pseudo-vision] OCR failed:', error);
+            // 失败必须可见：证据块会带上失败原因，模型不会误判"图里没文字"。
+            ocrError = String((error as Error)?.message ?? error);
             return null;
         });
         if (ocr !== null) {
@@ -290,6 +311,10 @@ export async function imageToText(
         }
     }
 
+    if (ocrBlock === null && ocrError !== null) {
+        ocrBlock = `[OCR 失败: ${ocrError}]`;
+    }
+
     const enhancement = darkMode ? '灰度+反色' : '灰度';
     const blocks: string[] = [];
     blocks.push(
@@ -300,7 +325,7 @@ export async function imageToText(
     if (colors !== null) blocks.push(formatColorStatsBlock(colors));
     if (scan !== null) blocks.push(formatUniversalScanBlock(scan));
     if (meta !== null) blocks.push(formatMetaBlock(meta));
-    const text = blocks.join('\n\n');
+    const text = capEvidence(blocks.join('\n\n'));
 
     await mkdir(options.cacheDir, { recursive: true }).catch(() => undefined);
     await writeFile(

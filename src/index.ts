@@ -33,8 +33,8 @@ import {
     type DeepSeekConnectionOptions,
 } from "@deepseek-ai/dsh-llm-deepseek";
 import { deepEqualJson, settingsNamespace } from "@deepseek-ai/dsh-settings";
-import { readFile } from "node:fs/promises";
 import z from "@deepseek-ai/schemastery";
+import { readImageFileSafe } from "./vision/file-guard.js";
 
 // Tool registry surface used by this plugin; declared loosely so the bundle
 // does not pin a specific dsh-tools version.
@@ -75,11 +75,14 @@ export {
 } from "./provider-bridge.js";
 export {
     buildVisionCacheKey,
+    capEvidence,
     imageToText,
+    MAX_EVIDENCE_CHARS,
     OCR_CACHE_PIPELINE,
     sha256Of,
 } from "./bridge.js";
 export { disposeOcr } from "./vision/ocr.js";
+export { DEFAULT_IMAGE_PIXEL_BUDGET } from "./adapter.js";
 
 const PROVIDER = "deepseek-official";
 const DEEPSEEK_NS = settingsNamespace("llm-deepseek");
@@ -373,7 +376,7 @@ function registerVisionTools(ctx: Context, config: { langs: string }): void {
             ],
         },
         execute: async (args: { file_path: string; langs?: string }) => {
-            const bytes = await readFile(args.file_path);
+            const bytes = await readImageFileSafe(args.file_path);
             const result = await ocrWithLowConfidenceRetry(bytes, args.langs ?? langs);
             const text = [
                 formatOcrBlock(result.initial),
@@ -409,7 +412,7 @@ function registerVisionTools(ctx: Context, config: { langs: string }): void {
             ],
         },
         execute: async (args: { file_path: string }) => {
-            const bytes = await readFile(args.file_path);
+            const bytes = await readImageFileSafe(args.file_path);
             const stats = await computeColorStats(bytes);
             return { text: formatColorStatsBlock(stats) };
         },
@@ -440,7 +443,7 @@ function registerVisionTools(ctx: Context, config: { langs: string }): void {
             ],
         },
         execute: async (args: { file_path: string; target?: string; threshold?: number }) => {
-            const bytes = await readFile(args.file_path);
+            const bytes = await readImageFileSafe(args.file_path);
             const result = await pixelScan(bytes, {
                 target: args.target ?? "#ff0000",
                 threshold: args.threshold ?? 0.05,
@@ -472,7 +475,7 @@ function registerVisionTools(ctx: Context, config: { langs: string }): void {
             ],
         },
         execute: async (args: { file_path: string }) => {
-            const bytes = await readFile(args.file_path);
+            const bytes = await readImageFileSafe(args.file_path);
             const result = await readMeta(bytes);
             return { text: formatMetaBlock(result) };
         },

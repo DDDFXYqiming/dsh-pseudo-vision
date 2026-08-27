@@ -24,6 +24,7 @@ import {
 
 import {
     buildPseudoVisionRequest,
+    DEFAULT_IMAGE_PIXEL_BUDGET,
     type PseudoVisionBridgeOptions,
 } from "./adapter.js";
 import { collectImageRefs } from "./content.js";
@@ -126,7 +127,7 @@ export class ProviderVisionBridgeAdapter extends LlmAdapter {
             ...resolved,
             provider,
             inputModalities: IMAGE_INPUT,
-            imagePixelBudget: resolved.imagePixelBudget ?? 64e6,
+            imagePixelBudget: resolved.imagePixelBudget ?? DEFAULT_IMAGE_PIXEL_BUDGET,
         };
     }
 

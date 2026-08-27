@@ -173,6 +173,31 @@ export function shouldAcceptDigitFix(
 const TOKEN_PUNCTUATION = new Set(['.', '-', ':', '/', ';', ',']);
 
 /**
+ * 替换第 nth（0-based）次出现的 needle。tesseract 输出中同一 token 可能
+ * 在表格/菜单里重复出现（如两列都有 "127.0.0.1"）：位置感知替换只改
+ * 目标 bbox 对应的那次，杜绝 String.replace 误伤第一个同名子串。
+ * 找不到第 nth 次出现时返回 null（调用方回退到首次出现替换）。
+ */
+export function replaceNth(haystack: string, needle: string, replacement: string, nth: number): string | null {
+    if (needle.length === 0) return null;
+    let from = 0;
+    for (let i = 0; i <= nth; i += 1) {
+        const idx = haystack.indexOf(needle, from);
+        if (idx === -1) return null;
+        if (i === nth) {
+            return haystack.slice(0, idx) + replacement + haystack.slice(idx + needle.length);
+        }
+        from = idx + needle.length;
+    }
+    return null;
+}
+
+/** 从修正后的 lines 重建全文：lines 是唯一权威文本源。 */
+export function rebuildFullText(lines: readonly OcrLine[]): string {
+    return lines.map((line) => line.text).join('\n');
+}
+
+/**
  * Fuse a same-length re-read with the original token: punctuation positions
  * keep the first-pass character (segmentation is usually right; glyph
  * identity is what the first pass got wrong), everything else takes the
@@ -213,7 +238,7 @@ export async function runOcr(
     // next full-page pass. The value must be a NUMBER: tesseract.js's PSM
     // enum holds strings ("3"), and passing the string "3" breaks full-page
     // detection (measured: 11 lines → 3 lines), while Number(3) is fine.
-    await worker.setParameters({ tessedit_pageseg_mode: Number(psm ?? PSM.AUTO) });
+    await worker.setParameters({ tessedit_pageseg_mode: Number(psm ?? PSM.AUTO) as unknown as PSM });
     const { data } = await worker.recognize(imageBytes);
 
     const meta = await sharp(imageBytes).metadata();
@@ -346,13 +371,13 @@ async function verifyDigitTokens(
     langs: string,
     maxFixes: number,
 ): Promise<DigitFix[]> {
-    const candidates: Array<{ word: OcrWord; lineIndex: number }> = [];
+    const candidates: Array<{ word: OcrWord; lineIndex: number; wordIndex: number }> = [];
     initial.lines.forEach((line, lineIndex) => {
-        for (const word of line.words) {
-            if (!isDigitCriticalToken(word.text)) continue;
-            if (word.confidence >= 92) continue;
-            candidates.push({ word, lineIndex });
-        }
+        line.words.forEach((word, wordIndex) => {
+            if (!isDigitCriticalToken(word.text)) return;
+            if (word.confidence >= 92) return;
+            candidates.push({ word, lineIndex, wordIndex });
+        });
     });
     if (candidates.length === 0) return [];
     candidates.sort((a, b) => a.word.confidence - b.word.confidence);
@@ -365,7 +390,7 @@ async function verifyDigitTokens(
     const digitWorker = await getDigitWorker(langs);
 
     const fixes: DigitFix[] = [];
-    for (const { word, lineIndex } of picked) {
+    for (const { word, lineIndex, wordIndex } of picked) {
         const left = Math.max(0, Math.floor(word.bbox.x1 * width) - 4);
         const top = Math.max(0, Math.floor(word.bbox.y1 * height) - 4);
         const right = Math.min(width, Math.ceil(word.bbox.x2 * width) + 4);
@@ -401,13 +426,17 @@ async function verifyDigitTokens(
             continue;
         }
         const line = initial.lines[lineIndex];
+        // 位置感知：只替换该 word 在行内同文本的第 N 次出现（表格/菜单
+        // 重复 token 场景下不误伤第一个）。fullText 不再在这里逐处 patch，
+        // 由 ocrWithLowConfidenceRetry 末尾统一从修正后的 lines 重建。
+        const occurrence = line.words
+            .slice(0, wordIndex)
+            .filter((w) => w.text === word.text).length;
+        const replaced = replaceNth(line.text, word.text, newText, occurrence);
         initial.lines[lineIndex] = {
             ...line,
-            text: line.text.replace(word.text, newText),
+            text: replaced ?? line.text.replace(word.text, newText),
         };
-        // Keep fullText consistent with the corrected lines: apply the same
-        // first-occurrence replacement to the raw tesseract text.
-        initial.fullText = initial.fullText.replace(word.text, newText);
         fixes.push({
             original: word.text,
             replacement: newText,
@@ -538,11 +567,15 @@ export async function ocrWithLowConfidenceRetry(
                         text: rereadText,
                         confidence: rereadConfidence,
                     };
-                    initial.fullText = initial.fullText.replace(original.text, rereadText);
                 }
             }
         }
     }
+
+    // 重建 fullText：lines 是唯一权威文本源。逐处 String.replace 会误伤
+    // 重复出现的行/词（且重试替换是整行粒度），统一重建保证
+    // 「OCR 全文与 lines 数组」永远一致。
+    initial.fullText = rebuildFullText(initial.lines);
 
     return { initial, retries, digitFixes };
 }
