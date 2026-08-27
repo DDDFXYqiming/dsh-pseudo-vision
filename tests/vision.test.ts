@@ -292,7 +292,9 @@ test('dark-mode detection and low-confidence retry formatting are deterministic'
             },
         ],
     };
-    assert.deepEqual(lowConfidenceRegions(initial, 60), [initial.lines[0]?.bbox]);
+    assert.deepEqual(lowConfidenceRegions(initial, 60), [
+        { region: initial.lines[0]!.bbox, lineIndex: 0 },
+    ]);
 
     const block = formatOcrRetryBlock({
         initial,
