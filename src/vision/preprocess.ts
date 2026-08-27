@@ -26,6 +26,12 @@ const DEFAULT_FACTOR = 28; // 吸附网格（部分 VLM 的 patch grid 惯例）
 const UPSCALE_MIN_DIMENSION = 800;
 const WHITE_BORDER_PX = 10;
 
+// 椒盐噪声检测参数（conditional median）
+const SALT_PEPPER_SCAN_WIDTH = 512; // 降采样宽度，检测足够快
+// 椒盐点占比达到该阈值才启用 median 降噪；干净 UI 截图通常为 0，
+// 一张 0.2% 椒盐噪声图实测 ≈ 0.0028。
+const SALT_PEPPER_DENOISE_THRESHOLD = 0.0005;
+
 /**
  * 把 (width, height) 缩放进 [minPixels, maxPixels] 区间并吸附到 factor 的
  * 整数倍。与 vision.py 的 smart_resize 行为一致：两个方向各自独立判断，
@@ -115,7 +121,46 @@ export async function budgetResize(
 }
 
 /**
- * OCR 增强：灰度 → （深色模式时）反色 → 对比度拉伸 → 轻降噪 → 轻锐化。
+ * 椒盐噪声估计：在 512px 宽降采样灰度图上统计"孤立黑白点"占比。
+ * clean UI 截图为 0；含椒盐噪声（扫描/陈旧压缩）的图 >0。
+ * 用途：conditional median —— 只在确有椒盐噪点时降噪，
+ * 干净图跳过 median，避免 3×3 中值磨掉 1px 细笔画（实测：
+ * median(3) 对缩放后的浅色小字直接把整行文字抹平，OCR 全乱码）。
+ */
+export async function estimateSaltPepperRate(imageBytes: Buffer): Promise<number> {
+    const { data, info } = await sharp(imageBytes)
+        .resize({ width: SALT_PEPPER_SCAN_WIDTH, withoutEnlargement: true })
+        .greyscale()
+        .raw()
+        .toBuffer({ resolveWithObject: true });
+    const w = info.width;
+    const h = info.height;
+    const d = data;
+    let isolated = 0;
+    let total = 0;
+    for (let y = 1; y < h - 1; y += 1) {
+        for (let x = 1; x < w - 1; x += 1) {
+            const i = y * w + x;
+            const v = d[i];
+            let salt = v > 225;
+            let pepper = v < 30;
+            for (let dy = -1; dy <= 1; dy += 1) {
+                for (let dx = -1; dx <= 1; dx += 1) {
+                    if (!dx && !dy) continue;
+                    const p = d[i + dy * w + dx];
+                    if (salt && p >= 180) salt = false;
+                    if (pepper && p <= 75) pepper = false;
+                }
+            }
+            if (salt || pepper) isolated += 1;
+            total += 1;
+        }
+    }
+    return total > 0 ? isolated / total : 0;
+}
+
+/**
+ * OCR 增强：灰度 → （深色模式时）反色 → 对比度拉伸 → 条件轻降噪 → 轻锐化。
  *
  * 2026-08-26 调参依据（tesseract 官方 ImproveQuality + 社区实测）：
  * - 过度处理有害：tesseract 内部自带 Otsu 二值化且使用梯度信息，
@@ -124,6 +169,9 @@ export async function budgetResize(
  * - 顺序敏感：median 必须在 normalize 之后——先拉伸对比度（浅灰 #666
  *   小字变深）再做 3×3 中值降噪，否则细笔画先被平滑抹平、整行漏检
  *   （实测：median 前置导致缩放图上"通用设置/模型"行消失）。
+ * - median 改为条件式：先估计椒盐噪声占比，≥ 阈值才降噪。固定 median(3)
+ *   对干净 UI 截图会把 1px 细笔画抹平（实测：1392×776 浅色小字整行
+ *   不可读），保留降噪能力的同时不伤干净图。
  * - 二值化交给 tesseract 内部 Otsu，不做外部二值化。
  */
 export async function enhanceForOcr(
@@ -135,11 +183,13 @@ export async function enhanceForOcr(
         // 反色只作用于颜色通道；alpha 保持原样，避免透明区域被翻转成不透明。
         pipeline.negate({ alpha: false });
     }
-    return pipeline
-        .normalize()
-        .median(3)
-        .sharpen({ sigma: 0.3 })
-        .toBuffer();
+    const denoise =
+        (await estimateSaltPepperRate(imageBytes)) >= SALT_PEPPER_DENOISE_THRESHOLD;
+    if (denoise) {
+        // 先归一化再做中值降噪：拉伸对比度后降噪，避免细笔画先被抹平。
+        return pipeline.normalize().median(3).sharpen({ sigma: 0.3 }).toBuffer();
+    }
+    return pipeline.normalize().sharpen({ sigma: 0.3 }).toBuffer();
 }
 
 /**

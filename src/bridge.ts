@@ -112,7 +112,7 @@ const AUTO_LARGE_THRESHOLD = 2_100_000;
  * upscale 2→3. Bump again whenever any of these knobs changes.
  */
 export const OCR_CACHE_PIPELINE =
-    'ocr-v5-min224-factor28-up800-border10-dark-enhance-chunk3000-2000-100-retry60-8x3-cjkfix-replacemain-textfirst-psm6num-scan-rowcol-v1-digitverify-v1';
+    'ocr-v5-min224-factor28-up800-border10-dark-condmedian-enhance-chunk3000-2000-100-retry60-8x3-cjkfix-replacemain-textfirst-psm6num-scan-rowcol-v1-digitverify-v1';
 
 export function buildVisionCacheKey(
     sha256: string,
