@@ -10,7 +10,7 @@
  * to a position in the original image.
  */
 
-import { createWorker, PSM, type Worker } from 'tesseract.js';
+import { createWorker, PSM, type Worker, type WorkerOptions } from 'tesseract.js';
 import sharp from 'sharp';
 
 const DEFAULT_LANGS = ['chi_sim+eng'] as const;
@@ -20,6 +20,16 @@ const DEFAULT_LANGS = ['chi_sim+eng'] as const;
 // `node_modules/tesseract.js/...` and downloads the `.gz` once on first
 // use. The cache survives process restarts, so subsequent runs are
 // fully offline.
+//
+// Offline/local override: set PV_TESSDATA to a directory holding plain
+// `.traineddata` files (not gzipped) and the workers read them directly —
+// no CDN round-trip at all. Used by the standalone pseudo-vision skill.
+
+/** Optional local tessdata directory (offline / slow-CDN scenarios). */
+const TESSDATA_DIR = process.env.PV_TESSDATA;
+const WORKER_OPTIONS: Partial<WorkerOptions> | undefined = TESSDATA_DIR
+    ? { langPath: TESSDATA_DIR, gzip: false }
+    : undefined;
 
 let cachedWorker: Worker | null = null;
 let cachedLangs: string | null = null;
@@ -31,7 +41,7 @@ async function getWorker(langs: string): Promise<Worker> {
         cachedWorker = null;
         cachedLangs = null;
     }
-    const worker = await createWorker(langs);
+    const worker = await createWorker(langs, undefined, WORKER_OPTIONS);
     cachedWorker = worker;
     cachedLangs = langs;
     return worker;
@@ -58,7 +68,7 @@ async function getDigitWorker(langs: string): Promise<Worker> {
         cachedDigitWorker = null;
         cachedDigitLangs = null;
     }
-    const worker = await createWorker(langs);
+    const worker = await createWorker(langs, undefined, WORKER_OPTIONS);
     await worker.setParameters({
         tessedit_char_whitelist: DIGIT_WHITELIST,
         // tesseract.js v5 的 PSM 枚举是字符串（"7"），digit worker 必须传数字
