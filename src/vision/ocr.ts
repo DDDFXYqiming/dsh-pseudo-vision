@@ -61,7 +61,9 @@ async function getDigitWorker(langs: string): Promise<Worker> {
     const worker = await createWorker(langs);
     await worker.setParameters({
         tessedit_char_whitelist: DIGIT_WHITELIST,
-        tessedit_pageseg_mode: PSM.SINGLE_LINE,
+        // tesseract.js v5 的 PSM 枚举是字符串（"7"），digit worker 必须传数字
+        // 否则单行模式不生效（实测破坏识别）。pi-pseudo-vision 同款修复。
+        tessedit_pageseg_mode: Number(PSM.SINGLE_LINE) as unknown as PSM,
     });
     cachedDigitWorker = worker;
     cachedDigitLangs = langs;

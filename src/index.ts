@@ -63,6 +63,7 @@ import {
     ocrWithLowConfidenceRetry,
 } from "./vision/ocr.js";
 import { pixelScan, formatPixelScanBlock } from "./vision/pixel-scan.js";
+import { preprocessForOcr } from "./vision/preprocess.js";
 
 export const name = "dsh-pseudo-vision";
 export const inject = ["llm", "attachments", "tools"];
@@ -330,7 +331,7 @@ export function apply(ctx: Context, config: PseudoVisionConfig): void {
         });
     });
 
-    registerVisionTools(ctx, { langs });
+    registerVisionTools(ctx, { langs, ocrBudget, ocrNoResize });
     ctx.effect(
         () => async () => {
             await disposeOcr();
@@ -340,7 +341,7 @@ export function apply(ctx: Context, config: PseudoVisionConfig): void {
     ctx.logger.info(`[dsh-pseudo-vision] bridge active on provider "${provider}"; cache=${cacheDir}`);
 }
 
-function registerVisionTools(ctx: Context, config: { langs: string }): void {
+function registerVisionTools(ctx: Context, config: { langs: string; ocrBudget: string; ocrNoResize: boolean }): void {
     const tools = ctx.tools;
     if (tools === undefined) {
         ctx.logger.warn("[dsh-pseudo-vision] ctx.tools unavailable; vision_* tools not exposed");
@@ -377,7 +378,23 @@ function registerVisionTools(ctx: Context, config: { langs: string }): void {
         },
         execute: async (args: { file_path: string; langs?: string }) => {
             const bytes = await readImageFileSafe(args.file_path);
-            const result = await ocrWithLowConfidenceRetry(bytes, args.langs ?? langs);
+            // 与 pi-pseudo-vision 对齐：工具路径也走预算预处理管线，
+            // 保证小字/低质量截图在手动调用时与 auto-bridge 同一识别质量。
+            const pre = await preprocessForOcr(
+                bytes,
+                config.ocrBudget,
+                undefined,
+                config.ocrNoResize,
+            );
+            const result = await ocrWithLowConfidenceRetry(
+                pre.bytes,
+                args.langs ?? langs,
+                {
+                    threshold: 60,
+                    maxRegions: 3,
+                    upscale: 2,
+                },
+            );
             const text = [
                 formatOcrBlock(result.initial),
                 formatOcrRetryBlock(result),
