@@ -2,13 +2,13 @@
 
 # dsh-pseudo-vision
 
-> 给 DeepSeek Harness 的 text-only provider 装上"工具层视觉"：图片在 LLM dispatch 路径上自动拆解成 **OCR 文字 + 颜色统计 + 像素扫描 + 元信息**，让任意纯文本模型也能"看图"。全程本机执行，**无外部视觉 API**。
+给 DeepSeek Harness 的 text-only provider 补一层"工具层视觉"。图片附件在 LLM dispatch 路径上被拆解成 **OCR 文字 + 颜色统计 + 像素扫描 + 元信息**，纯文本模型拿到这些文字，就能"看"懂一张图。所有处理都在本机完成，**无外部视觉 API**。
 
 ## 它在做什么
 
-- 接管 `deepseek-official` 路由；按 `bridgeProviders` 白名单（或 `bridgeOtherProviders`）为其他 text-only provider 生成兄弟路由 `dsh-pseudo-vision/<provider>`（模型选择器中显示 `· Pseudo Vision`）
-- 兄弟路由强制声明 `inputModalities: ["text", "image"]`，通过 DSH 图片 admission 门
-- LLM dispatch 时：原生视觉模型透传；text-only 模型读附件 → 本地 4 工具转文本 → 替换 image block + 注入 `<pseudo-vision-context>` → 委派回原 provider
+- 插件接管 `deepseek-official` 路由，这条路由原本就能看图。其他 text-only provider 按 `bridgeProviders` 白名单生成兄弟路由 `dsh-pseudo-vision/<provider>`（模型选择器中显示 `· Pseudo Vision`），也可以用 `bridgeOtherProviders` 一并覆盖。
+- 兄弟路由强制声明 `inputModalities: ["text", "image"]`，请求才能通过 DSH 的图片 admission 门。
+- LLM dispatch 时分两种情况。原生视觉模型直接透传。text-only 模型则读附件，用本地四个工具把图片转成文字，替换掉 image block，注入 `<pseudo-vision-context>`，再委派回原 provider。
 
 ## 提供的工具
 
@@ -21,15 +21,17 @@
 
 ### OCR 管线（v5）
 
-1. **预处理**：预算缩放（small/normal/large/mega，28 网格吸附）→ 深色模式检测（浅色不反色）→ 灰度 → 对比度拉伸 → 椒盐噪声检测（有噪才 3×3 中值降噪，干净图跳过，避免磨掉 1px 细笔画）→ 轻锐化（σ0.3）→ 白边
-2. **主识别**：tesseract 整页，输出全部文字行 + 置信度；非文本块（image/separator）过滤
-3. **低置信度重试**：最多 8 个区域，**文字行优先**（图标噪声行不抢占名额）；裁剪 + 3× Lanczos 放大 + 单文本块模式（PSM 6）重读；**置信度更高时替换主行**（证据块仍留痕）
-4. **CJK 后处理**：字间空格合并（`通 知`→`通知`）、行首图标符号剥离
-5. **数字复核**：IP/URL/端口/长数字用 ASCII 白名单 + 单行模式重识别，标点保持首遍骨架，同长度 + 置信提升 ≥5 才接受，`[数字复核 N 处]` 留痕
+1. **预处理**先按预算缩放图片（small/normal/large/mega，28 网格吸附），随后检测深色模式（浅色不反色），转灰度，做对比度拉伸。接着检测椒盐噪声，有噪才走 3×3 中值降噪，干净图跳过这一步，避免磨掉 1px 细笔画。最后轻锐化（σ0.3）加白边。
+2. **主识别**由 tesseract 整页完成，输出全部文字行和置信度，非文本块（image/separator）会被过滤。
+3. **低置信度重试**最多做 8 个区域，文字行优先排队，图标噪声行不占名额。重读时裁剪区域，3× Lanczos 放大，用单文本块模式（PSM 6）。置信度更高的重读结果替换主行，证据块仍留痕。
+4. **CJK 后处理**合并字间空格（`通 知`→`通知`），剥离行首图标符号。
+5. **数字复核**针对 IP/URL/端口/长数字，用 ASCII 白名单加单行模式重新识别。标点保持首遍骨架，只有同长度且置信提升 ≥5 的结果才被接受，`[数字复核 N 处]` 留痕。
 
-> 实机验证：设置页截图 OCR 从"只出顶部 3 行、菜单文字全丢"修复为 11 行全检出、"通用设置/模型/通知"完全干净。关键修复：tesseract.js 的 PSM 参数必须传数字（字符串 `"3"` 会破坏整页检测）。
+> 一次实机验证里，设置页截图的 OCR 从"只出顶部 3 行、菜单文字全丢"修复为 11 行全检出，"通用设置/模型/通知"完全干净。关键修复在 tesseract.js 的 PSM 参数必须传数字，字符串 `"3"` 会破坏整页检测。
 
 ## 安装
+
+推荐直接从 GitHub 安装，需要网络。Windows 上遇到 schannel/pnpm 拦截时，改用本地路径安装。
 
 ```bash
 # GitHub 安装（需网络，推荐）
@@ -43,7 +45,7 @@ dsh plugin --profile web add <本机绝对路径>
 
 ## 使用
 
-装上即生效，无需额外配置。`deepseek-official` 路由自动支持图片；其他 provider 需显式白名单：
+装上即生效，无需额外配置。`deepseek-official` 路由自动支持图片。其他 provider 默认没有兄弟路由，要在配置里显式加白名单。
 
 ```yaml
 - id: dsh-pseudo-vision
@@ -53,10 +55,10 @@ dsh plugin --profile web add <本机绝对路径>
     ocrNoResize: false                     # true：跳过预算缩放/放大
 ```
 
-一次性桥接除 `excludeProviders` 外的所有 provider（谨慎：每个模型在选择器多一份条目）：
+也可以把 `bridgeOtherProviders` 设为 true，一次性桥接除 `excludeProviders` 外的所有 provider。代价是每个模型会在选择器里多出一份条目，开之前先想清楚。
 
 ```yaml
     bridgeOtherProviders: true
 ```
 
-模型选择器出现 `dsh-pseudo-vision/<provider>` 兄弟路由；text-only 模型走本地伪视觉转换，原生视觉模型保持原生透传。
+配好以后，模型选择器里会出现 `dsh-pseudo-vision/<provider>` 兄弟路由。text-only 模型走本地伪视觉转换，原生视觉模型保持原生透传。
