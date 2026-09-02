@@ -43,6 +43,15 @@ cd dsh-pseudo-vision && pnpm install && pnpm build
 dsh plugin --profile web add <local absolute path>
 ```
 
+The GitHub route triggers the `prepare` script, which builds `lib/` from source. On the first `add`, pnpm >= 10 refuses to run build scripts of git dependencies: copy the exact package key pnpm prints into the profile's `pnpm-workspace.yaml`, then re-run `add`:
+
+```yaml
+allowBuilds:
+  dsh-pseudo-vision: true
+```
+
+Treat this approval as "let this package run code on your machine at install time". Pin a commit (`github:DDDFXYqiming/dsh-pseudo-vision#<sha>`) if you want later pushes to stop changing what gets built.
+
 ## Usage
 
 It works out of the box, with no extra configuration. The `deepseek-official` route keeps handling images natively. Other providers get no sibling route by default, so opt in explicitly.

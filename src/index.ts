@@ -33,19 +33,9 @@ import {
     type DeepSeekConnectionOptions,
 } from "@deepseek-ai/dsh-llm-deepseek";
 import { deepEqualJson, settingsNamespace } from "@deepseek-ai/dsh-settings";
+import { defineTool } from "@deepseek-ai/dsh-tools";
 import z from "@deepseek-ai/schemastery";
 import { readImageFileSafe } from "./vision/file-guard.js";
-
-// Tool registry surface used by this plugin; declared loosely so the bundle
-// does not pin a specific dsh-tools version.
-export interface ToolRegistryLike {
-    register(definition: unknown): () => void;
-}
-declare module "@deepseek-ai/cordis" {
-    interface Context {
-        tools?: ToolRegistryLike;
-    }
-}
 
 import { PseudoVisionBridgeAdapter } from "./adapter.js";
 import {
@@ -343,40 +333,29 @@ export function apply(ctx: Context, config: PseudoVisionConfig): void {
 
 function registerVisionTools(ctx: Context, config: { langs: string; ocrBudget: string; ocrNoResize: boolean }): void {
     const tools = ctx.tools;
-    if (tools === undefined) {
-        ctx.logger.warn("[dsh-pseudo-vision] ctx.tools unavailable; vision_* tools not exposed");
-        return;
-    }
-
     const langs = config.langs;
 
     tools.register(defineTool({
         name: "vision_ocr",
         description: "Extract every text line in an image, returning recognised text with a normalised bounding box. Runs the full local pipeline: low-confidence lines are re-read from enlarged crops, and digit-critical tokens (IP/URL/port) get a whitelist verification pass. Local tesseract.js; no network.",
         parameters: {
-            type: "object",
-            required: ["file_path"],
-            properties: {
-                file_path: { type: "string", description: "PNG/JPEG/WebP/GIF path on disk." },
-                langs: { type: "string", description: `tessdata languages, default ${langs}.` },
-            },
-            additionalProperties: false,
+            file_path: { type: "string", required: true, description: "PNG/JPEG/WebP/GIF path on disk." },
+            langs: { type: "string", description: `tessdata languages, default ${langs}.` },
         },
         output: {
             schema: {
                 type: "object",
-                required: ["text"],
+                additionalProperties: false,
                 properties: {
-                    text: { type: "string" },
+                    text: { type: "string", required: true },
                     lines: { type: "integer" },
                 },
-                additionalProperties: false,
             },
-            render: (_args, value: { text: string; lines: number }) => [
+            render: (_args, value) => [
                 { type: "text", text: value.text },
             ],
         },
-        execute: async (args: { file_path: string; langs?: string }) => {
+        execute: async (args) => {
             const bytes = await readImageFileSafe(args.file_path);
             // 与 pi-pseudo-vision 对齐：工具路径也走预算预处理管线，
             // 保证小字/低质量截图在手动调用时与 auto-bridge 同一识别质量。
@@ -410,25 +389,19 @@ function registerVisionTools(ctx: Context, config: { langs: string; ocrBudget: s
         name: "vision_color_stats",
         description: "Bucket every pixel into coarse colour categories (white/black/grey/red/green/blue/...) and report each bucket's share of the total.",
         parameters: {
-            type: "object",
-            required: ["file_path"],
-            properties: {
-                file_path: { type: "string", description: "PNG/JPEG/WebP/GIF path on disk." },
-            },
-            additionalProperties: false,
+            file_path: { type: "string", required: true, description: "PNG/JPEG/WebP/GIF path on disk." },
         },
         output: {
             schema: {
                 type: "object",
-                required: ["text"],
-                properties: { text: { type: "string" } },
                 additionalProperties: false,
+                properties: { text: { type: "string", required: true } },
             },
-            render: (_args, value: { text: string }) => [
+            render: (_args, value) => [
                 { type: "text", text: value.text },
             ],
         },
-        execute: async (args: { file_path: string }) => {
+        execute: async (args) => {
             const bytes = await readImageFileSafe(args.file_path);
             const stats = await computeColorStats(bytes);
             return { text: formatColorStatsBlock(stats) };
@@ -439,27 +412,21 @@ function registerVisionTools(ctx: Context, config: { langs: string; ocrBudget: s
         name: "vision_pixel_scan",
         description: "Walk every row of the image and report rows where the target colour's pixel density exceeds a threshold. Use to spot horizontal lines or coloured bands.",
         parameters: {
-            type: "object",
-            required: ["file_path"],
-            properties: {
-                file_path: { type: "string", description: "PNG/JPEG/WebP/GIF path on disk." },
-                target: { type: "string", description: "Hex colour (default red #ff0000)." },
-                threshold: { type: "number", description: "Minimum row density 0..1, default 0.05." },
-            },
-            additionalProperties: false,
+            file_path: { type: "string", required: true, description: "PNG/JPEG/WebP/GIF path on disk." },
+            target: { type: "string", description: "Hex colour (default red #ff0000)." },
+            threshold: { type: "number", description: "Minimum row density 0..1, default 0.05." },
         },
         output: {
             schema: {
                 type: "object",
-                required: ["text"],
-                properties: { text: { type: "string" } },
                 additionalProperties: false,
+                properties: { text: { type: "string", required: true } },
             },
-            render: (_args, value: { text: string }) => [
+            render: (_args, value) => [
                 { type: "text", text: value.text },
             ],
         },
-        execute: async (args: { file_path: string; target?: string; threshold?: number }) => {
+        execute: async (args) => {
             const bytes = await readImageFileSafe(args.file_path);
             const result = await pixelScan(bytes, {
                 target: args.target ?? "#ff0000",
@@ -473,25 +440,19 @@ function registerVisionTools(ctx: Context, config: { langs: string; ocrBudget: s
         name: "vision_meta",
         description: "Read image metadata (dimensions, format, colour space) and sample colours at the four corners plus the centre. Cheap call, useful for layout inferences.",
         parameters: {
-            type: "object",
-            required: ["file_path"],
-            properties: {
-                file_path: { type: "string", description: "PNG/JPEG/WebP/GIF path on disk." },
-            },
-            additionalProperties: false,
+            file_path: { type: "string", required: true, description: "PNG/JPEG/WebP/GIF path on disk." },
         },
         output: {
             schema: {
                 type: "object",
-                required: ["text"],
-                properties: { text: { type: "string" } },
                 additionalProperties: false,
+                properties: { text: { type: "string", required: true } },
             },
-            render: (_args, value: { text: string }) => [
+            render: (_args, value) => [
                 { type: "text", text: value.text },
             ],
         },
-        execute: async (args: { file_path: string }) => {
+        execute: async (args) => {
             const bytes = await readImageFileSafe(args.file_path);
             const result = await readMeta(bytes);
             return { text: formatMetaBlock(result) };
@@ -501,19 +462,3 @@ function registerVisionTools(ctx: Context, config: { langs: string; ocrBudget: s
     ctx.logger.info("[dsh-pseudo-vision] tools registered: vision_ocr, vision_color_stats, vision_pixel_scan, vision_meta");
 }
 
-/**
- * Local stand-in for `@deepseek-ai/dsh-tool-cordis`'s `defineTool` — keeps
- * the plugin free of a hard dependency on a specific dsh-tools version.
- * DSH injects its own typed `defineTool` when the bundle opts in via
- * `inject: ['tools']`; this function exists so the plugin still compiles
- * and runs against the local test harness.
- */
-function defineTool<TArgs, TValue>(spec: {
-    name: string;
-    description: string;
-    parameters: unknown;
-    output: unknown;
-    execute: (args: TArgs) => Promise<TValue>;
-}): unknown {
-    return spec;
-}

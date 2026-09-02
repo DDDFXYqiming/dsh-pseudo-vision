@@ -4,6 +4,10 @@ All notable changes to dsh-pseudo-vision are documented here.
 
 ## [Unreleased]
 
+### Fixed
+- **git 安装合规（publish 文档）**：新增自包含 `prepare` 脚本（`tsdown`），`github:` 安装在 pnpm ≥10 授权（profile `allowBuilds`）后即可拿到构建好的 `lib/`；README 双语补充授权说明。
+- **工具契约合规（tool 文档）**：删除本地 `defineTool` identity 桩与松散的 `Context.tools` 声明合并，改为 import 官方 `@deepseek-ai/dsh-tools` 的 `defineTool`——四个 `vision_*` 工具恢复模型参数的运行期校验（validateArgs），`parameters`/`output.schema` 改用官方属性映射 DSL。
+
 ### Removed
 - Removed the browser client bundle and its Settings → Plugins configuration card. The plugin has no interactive settings, remains visible in the installed-plugin inventory, and keeps provider allowlists in configuration files.
 

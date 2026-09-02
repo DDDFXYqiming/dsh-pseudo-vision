@@ -43,6 +43,15 @@ cd dsh-pseudo-vision && pnpm install && pnpm build
 dsh plugin --profile web add <本机绝对路径>
 ```
 
+GitHub 安装会触发 `prepare` 脚本从源码构建 `lib/`。pnpm ≥10 首次 `add` 会拒绝运行该构建脚本：把 pnpm 打印的包键复制进 profile 的 `pnpm-workspace.yaml` 后重新 `add` 即可，例如：
+
+```yaml
+allowBuilds:
+  dsh-pseudo-vision: true
+```
+
+请把这项授权视为「允许该包代码在安装时于你的机器上执行」；担心后续推送改变构建内容时，锁定 commit（`github:DDDFXYqiming/dsh-pseudo-vision#<sha>`）。
+
 ## 使用
 
 装上即生效，无需额外配置。`deepseek-official` 路由自动支持图片。其他 provider 默认没有兄弟路由，要在配置里显式加白名单。

@@ -25,7 +25,8 @@
     "typecheck": "tsc --noEmit",
     "test": "pnpm build && node --experimental-strip-types --test tests/*.test.ts",
     "check": "pnpm typecheck && pnpm test",
-    "prepack": "pnpm build"
+    "prepack": "pnpm build",
+    "prepare": "tsdown"
   },
   "keywords": [
     "dsh",
@@ -62,6 +63,7 @@
     "@deepseek-ai/dsh-llm": "0.1.1-rc.2",
     "@deepseek-ai/dsh-llm-deepseek": "0.1.1-rc.2",
     "@deepseek-ai/dsh-settings": "0.1.1-rc.2",
+    "@deepseek-ai/dsh-tools": "0.1.1-rc.2",
     "@types/node": "^24.0.0",
     "tsdown": "^0.22.14",
     "typescript": "^5.9.3"
@@ -74,7 +76,8 @@
     "@deepseek-ai/dsh-launch-environment": "0.1.1-rc.2",
     "@deepseek-ai/dsh-llm": "0.1.1-rc.2",
     "@deepseek-ai/dsh-llm-deepseek": "0.1.1-rc.2",
-    "@deepseek-ai/dsh-settings": "0.1.1-rc.2"
+    "@deepseek-ai/dsh-settings": "0.1.1-rc.2",
+    "@deepseek-ai/dsh-tools": "*"
   },
   "dsh": {
     "bundle": {
