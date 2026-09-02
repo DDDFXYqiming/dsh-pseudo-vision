@@ -104,11 +104,18 @@ const AUTO_LARGE_THRESHOLD = 2_100_000;
  */
 export const MAX_EVIDENCE_CHARS = 32_000;
 
+let evidenceCharCap = MAX_EVIDENCE_CHARS;
+
+/** Config entry point: lower/raise the evidence cap (non-positive keeps the default). */
+export function setEvidenceCharCap(maxChars: number): void {
+    if (Number.isFinite(maxChars) && maxChars > 0) evidenceCharCap = maxChars;
+}
+
 export function capEvidence(text: string): string {
-    if (text.length <= MAX_EVIDENCE_CHARS) return text;
+    if (text.length <= evidenceCharCap) return text;
     return (
-        text.slice(0, MAX_EVIDENCE_CHARS)
-        + `\n[证据已截断：${text.length} 字符 > ${MAX_EVIDENCE_CHARS}（约 ${Math.ceil(text.length / 4)} tokens），仅保留前 ${MAX_EVIDENCE_CHARS} 字符]`
+        text.slice(0, evidenceCharCap)
+        + `\n[证据已截断：${text.length} 字符 > ${evidenceCharCap}（约 ${Math.ceil(text.length / 4)} tokens），仅保留前 ${evidenceCharCap} 字符]`
     );
 }
 

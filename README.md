@@ -62,6 +62,8 @@ allowBuilds:
     bridgeProviders: ["kimi-for-coding"]   # 只给这个 provider 生成兄弟路由
     ocrBudget: auto                        # 也可 small | normal | large | mega
     ocrNoResize: false                     # true：跳过预算缩放/放大
+    evidenceMaxChars: 32000                # 模型证据文本字符封顶
+    # tessdataDir: "D:/tessdata"           # 离线 traineddata 目录；设置后优先于 PV_TESSDATA 环境变量
 ```
 
 也可以把 `bridgeOtherProviders` 设为 true，一次性桥接除 `excludeProviders` 外的所有 provider。代价是每个模型会在选择器里多出一份条目，开之前先想清楚。

@@ -25,11 +25,16 @@ const DEFAULT_LANGS = ['chi_sim+eng'] as const;
 // `.traineddata` files (not gzipped) and the workers read them directly —
 // no CDN round-trip at all. Used by the standalone pseudo-vision skill.
 
-/** Optional local tessdata directory (offline / slow-CDN scenarios). */
-const TESSDATA_DIR = process.env.PV_TESSDATA;
-const WORKER_OPTIONS: Partial<WorkerOptions> | undefined = TESSDATA_DIR
-    ? { langPath: TESSDATA_DIR, gzip: false }
-    : undefined;
+/** Optional local tessdata directory (offline / slow-CDN scenarios); Config wins over the env fallback. */
+let tessdataDir: string | undefined = process.env.PV_TESSDATA;
+
+export function setTessdataDir(dir: string | undefined): void {
+    if (dir) tessdataDir = dir;
+}
+
+function workerOptions(): Partial<WorkerOptions> | undefined {
+    return tessdataDir ? { langPath: tessdataDir, gzip: false } : undefined;
+}
 
 let cachedWorker: Worker | null = null;
 let cachedLangs: string | null = null;
@@ -41,7 +46,7 @@ async function getWorker(langs: string): Promise<Worker> {
         cachedWorker = null;
         cachedLangs = null;
     }
-    const worker = await createWorker(langs, undefined, WORKER_OPTIONS);
+    const worker = await createWorker(langs, undefined, workerOptions());
     cachedWorker = worker;
     cachedLangs = langs;
     return worker;
@@ -68,7 +73,7 @@ async function getDigitWorker(langs: string): Promise<Worker> {
         cachedDigitWorker = null;
         cachedDigitLangs = null;
     }
-    const worker = await createWorker(langs, undefined, WORKER_OPTIONS);
+    const worker = await createWorker(langs, undefined, workerOptions());
     await worker.setParameters({
         tessedit_char_whitelist: DIGIT_WHITELIST,
         // tesseract.js v5 的 PSM 枚举是字符串（"7"），digit worker 必须传数字

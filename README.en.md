@@ -62,6 +62,8 @@ It works out of the box, with no extra configuration. The `deepseek-official` ro
     bridgeProviders: ["kimi-for-coding"]   # only this provider gets a sibling route
     ocrBudget: auto                        # also small | normal | large | mega
     ocrNoResize: false                     # true: skip budget resize/upscale
+    evidenceMaxChars: 32000                # character cap on model-visible evidence text
+    # tessdataDir: "D:/tessdata"           # offline traineddata dir; wins over the PV_TESSDATA env fallback
 ```
 
 You can also set `bridgeOtherProviders` to bridge every provider except the excluded list in one go. The tradeoff is one extra entry per model in the selector, so think before turning it on.

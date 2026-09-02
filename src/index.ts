@@ -51,6 +51,7 @@ import {
     formatOcrBlock,
     formatOcrRetryBlock,
     ocrWithLowConfidenceRetry,
+    setTessdataDir,
 } from "./vision/ocr.js";
 import { pixelScan, formatPixelScanBlock } from "./vision/pixel-scan.js";
 import { preprocessForOcr } from "./vision/preprocess.js";
@@ -72,6 +73,7 @@ export {
     OCR_CACHE_PIPELINE,
     sha256Of,
 } from "./bridge.js";
+import { MAX_EVIDENCE_CHARS, setEvidenceCharCap } from "./bridge.js";
 export { disposeOcr } from "./vision/ocr.js";
 export { DEFAULT_IMAGE_PIXEL_BUDGET } from "./adapter.js";
 
@@ -80,7 +82,7 @@ const DEEPSEEK_NS = settingsNamespace("llm-deepseek");
 
 export interface PseudoVisionConfig {
     /** Local cache directory for converted image text. */
-    cacheDir?: string;
+    cacheDir: string;
     /** Re-run the vision tools even when a cached conversion exists. */
     bypassCache?: boolean;
     /** Maximum images converted per request. */
@@ -106,10 +108,19 @@ export interface PseudoVisionConfig {
     bridgeProviders?: string[];
     /** Provider ids that should not receive a pseudo-vision sibling route. */
     excludeProviders?: string[];
+    /**
+     * Local tessdata directory for offline / slow-CDN scenarios. When set,
+     * it takes precedence over the PV_TESSDATA environment variable.
+     */
+    tessdataDir: string;
+    /** Character cap on evidence text handed to the model. */
+    evidenceMaxChars: number;
 }
 
+const DEFAULT_CACHE_DIR = ".dsh-pseudo-vision/cache";
+
 export const PseudoVisionConfigSchema: z<PseudoVisionConfig> = z.object({
-    cacheDir: z.string(),
+    cacheDir: z.string().default(DEFAULT_CACHE_DIR),
     bypassCache: z.boolean().default(false),
     maxImages: z.number().step(1).min(1).max(32).default(8),
     langs: z.string().default("chi_sim+eng"),
@@ -119,14 +130,14 @@ export const PseudoVisionConfigSchema: z<PseudoVisionConfig> = z.object({
     bridgeOtherProviders: z.boolean().default(false),
     bridgeProviders: z.array(z.string()).default([]),
     excludeProviders: z.array(z.string()).default([]),
+    tessdataDir: z.string().default(""),
+    evidenceMaxChars: z.number().min(1000).default(MAX_EVIDENCE_CHARS),
 });
 
 export const Config = z.intersect([
     DeepSeekConfigSchema,
     PseudoVisionConfigSchema,
 ]) as unknown as z<PseudoVisionConfig & DeepSeekConfig>;
-
-const DEFAULT_CACHE_DIR = ".dsh-pseudo-vision/cache";
 
 function deepseekPart(config: PseudoVisionConfig): DeepSeekConfig {
     const {
@@ -140,6 +151,8 @@ function deepseekPart(config: PseudoVisionConfig): DeepSeekConfig {
         bridgeOtherProviders: _bridgeOtherProviders,
         bridgeProviders: _bridgeProviders,
         excludeProviders: _excludeProviders,
+        tessdataDir: _tessdataDir,
+        evidenceMaxChars: _evidenceMaxChars,
         ...deepseek
     } = config;
     return deepseek as DeepSeekConfig;
@@ -147,7 +160,9 @@ function deepseekPart(config: PseudoVisionConfig): DeepSeekConfig {
 
 export function apply(ctx: Context, config: PseudoVisionConfig): void {
     const provider = config.provider ?? PROVIDER;
-    const cacheDir = config.cacheDir ?? DEFAULT_CACHE_DIR;
+    const cacheDir = config.cacheDir;
+    setTessdataDir(config.tessdataDir || undefined);
+    setEvidenceCharCap(config.evidenceMaxChars);
     const bypassCache = config.bypassCache ?? false;
     const maxImages = config.maxImages ?? 8;
     const langs = config.langs ?? "chi_sim+eng";
