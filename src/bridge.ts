@@ -354,6 +354,68 @@ export async function imageToText(
     return text;
 }
 
+/** Options for the compact (history-tier) evidence path. */
+export interface CompactVisionOptions {
+    /**
+     * Absolute host path of the normalized attachment (from
+     * `AttachmentStore.imageHostPath`), used for the fold pointer line so the
+     * agent can re-read the full OCR with `vision_ocr` on demand.
+     */
+    hostPath?: string;
+}
+
+/**
+ * Compact evidence for history-turn images: header + metadata + colour
+ * statistics + pixel scan, and NO tesseract pass. Sharp-only work costs tens
+ * of milliseconds and a few hundred characters, so dozens of old images stay
+ * negligible while the OCR body remains re-fetchable through the pointer.
+ */
+export async function imageToCompactText(
+    image: ResolvedImage,
+    options: CompactVisionOptions = {},
+): Promise<string> {
+    const [decoded, meta] = await Promise.all([
+        decodeAndColorStats(image.bytes).catch((error) => {
+            console.error('[dsh-pseudo-vision] compact color decode failed:', error);
+            return null;
+        }),
+        readMeta(image.bytes).catch((error) => {
+            console.error('[dsh-pseudo-vision] compact meta failed:', error);
+            return null;
+        }),
+    ]);
+
+    const blocks: string[] = [];
+    blocks.push(
+        `[dsh-pseudo-vision·紧凑] sha256=${image.sha256.slice(0, 12)} `
+        + `原图:${image.mediaType} ${image.bytes.length}B（历史轮次，OCR 已折叠）`,
+    );
+    if (options.hostPath !== undefined && options.hostPath !== '') {
+        blocks.push(`[OCR 已折叠] 需要这张图的文字内容时，调用 vision_ocr(file_path="${options.hostPath}") 回读全图。`);
+    } else {
+        blocks.push('[OCR 已折叠] 需要这张图的文字内容时，请请用户重新发送该图片。');
+    }
+
+    if (decoded !== null) {
+        blocks.push(formatColorStatsBlock(decoded.stats));
+        const backgroundBuckets = decoded.stats.buckets
+            .filter((bucket) => bucket.share >= 0.30)
+            .map((bucket) => bucket.name);
+        const scan = await pixelScanUniversal(decoded.raw, {
+            backgroundBuckets,
+            threshold: 0.15,
+            backgroundCap: 0.9,
+            maxHitsPerBucket: 5,
+        }).catch((error) => {
+            console.error('[dsh-pseudo-vision] compact scan failed:', error);
+            return null;
+        });
+        if (scan !== null) blocks.push(formatUniversalScanBlock(scan));
+    }
+    if (meta !== null) blocks.push(formatMetaBlock(meta));
+    return blocks.join('\n\n');
+}
+
 /**
  * Compute the sha256 of a buffer; reused by callers that want to dedupe
  * images across the bridge before doing any heavy work.

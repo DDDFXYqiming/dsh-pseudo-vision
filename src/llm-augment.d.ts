@@ -12,4 +12,16 @@ declare module "@deepseek-ai/dsh-llm" {
     }
 }
 
+// The running host's AttachmentStore exposes `imageHostPath` (absolute host
+// path of the normalized object), but the pinned dsh-attachment type surface
+// predates it. Declare it optional so the compact-evidence pointer line can
+// call it defensively on older hosts.
+import type { ImageAttachmentRef } from "@deepseek-ai/dsh-attachment";
+
+declare module "@deepseek-ai/dsh-attachment" {
+    interface AttachmentStore {
+        imageHostPath?(ref: ImageAttachmentRef): string | undefined;
+    }
+}
+
 export {};

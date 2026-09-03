@@ -14,6 +14,16 @@ All notable changes to dsh-pseudo-vision are documented here.
 ### Removed
 - Removed the browser client bundle and its Settings → Plugins configuration card. The plugin has no interactive settings, remains visible in the installed-plugin inventory, and keeps provider allowlists in configuration files.
 
+## [0.6.0] - 2026-09-05
+
+### Changed
+- **Over-limit image requests degrade instead of failing**: the hard `PSEUDO_VISION_IMAGE_LIMIT` throw is gone. A request with more images than `maxImages` now converts the current-turn prefix within the count and evidence budgets, and every unconverted image keeps an explicit `[图片 N 未转换…]` placeholder plus a `[⚠️ 图片处理摘要]` line, so nothing disappears silently and the turn still runs.
+- **Turn-tiered evidence**: images from the last `fullEvidenceTurns` (default 2) user turns get the full local pipeline; older-turn images automatically degrade to compact evidence (metadata + colour statistics + pixel scan, no tesseract) with an `[OCR 已折叠]` line carrying `vision_ocr(file_path=…)` re-fetch pointers from `AttachmentStore.imageHostPath`. Re-attaching an old image in a new turn restores its full tier.
+- **Total evidence budget**: new `maxTotalEvidenceChars` (default 96 000, ≈24K tokens) hard-caps combined evidence text per request across both tiers; the first included image is never dropped for its own size, and `maxImages` now bounds OCR wall-time rather than context.
+
+### Verification
+- Regression tests: overflow partial conversion, history-tier compaction with pointer line, budget skip-first-keep behavior.
+
 ## [0.5.3] - 2026-08-21
 
 ### Fixed

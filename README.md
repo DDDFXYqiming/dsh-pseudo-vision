@@ -9,6 +9,8 @@
 - 插件接管 `deepseek-official` 路由，这条路由原本就能看图。其他 text-only provider 按 `bridgeProviders` 白名单生成兄弟路由 `dsh-pseudo-vision/<provider>`（模型选择器中显示 `· Pseudo Vision`），也可以用 `bridgeOtherProviders` 一并覆盖。
 - 兄弟路由强制声明 `inputModalities: ["text", "image"]`，请求才能通过 DSH 的图片 admission 门。
 - LLM dispatch 时分两种情况。原生视觉模型直接透传。text-only 模型则读附件，用本地四个工具把图片转成文字，替换掉 image block，注入 `<pseudo-vision-context>`，再委派回原 provider。
+- 证据按轮次分层：最近 `fullEvidenceTurns`（默认 2）个用户轮的图片走全量管线；更早轮次的图片自动降级为**紧凑证据**（元信息+颜色+扫描，不跑 OCR），并附 `vision_ocr(file_path=…)` 回读指针，需要旧图文字时模型自己取回。历史图重新出现在新消息里会自动恢复全量。
+- 单请求有双护栏：`maxImages`（默认 8）限全量张数，`maxTotalEvidenceChars`（默认 96000 字符，约 24K tokens）限证据文本总量。超限时不再报错中止，未转换的图片留下 `[图片 N 未转换…]` 占位符并在上下文末尾附 `[⚠️ 图片处理摘要]`，模型会明确告知用户哪些图未生效。
 
 ## 提供的工具
 
@@ -62,8 +64,11 @@ allowBuilds:
     bridgeProviders: ["kimi-for-coding"]   # 只给这个 provider 生成兄弟路由
     ocrBudget: auto                        # 也可 small | normal | large | mega
     ocrNoResize: false                     # true：跳过预算缩放/放大
-    evidenceMaxChars: 32000                # 模型证据文本字符封顶
+    evidenceMaxChars: 32000                # 单图证据文本字符封顶
     # tessdataDir: "D:/tessdata"           # 离线 traineddata 目录；设置后优先于 PV_TESSDATA 环境变量
+    maxImages: 8                           # 单请求全量证据张数上限（1-32）
+    maxTotalEvidenceChars: 96000           # 单请求证据文本总字符硬顶（16000-320000）
+    fullEvidenceTurns: 2                   # 最近 N 个用户轮保留全量，更早降级紧凑（1-8）
 ```
 
 也可以把 `bridgeOtherProviders` 设为 true，一次性桥接除 `excludeProviders` 外的所有 provider。代价是每个模型会在选择器里多出一份条目，开之前先想清楚。

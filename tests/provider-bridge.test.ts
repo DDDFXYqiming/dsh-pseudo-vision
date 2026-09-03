@@ -181,3 +181,160 @@ test('generic sibling route removes images before delegating to text-only provid
         await rm(cacheDir, { recursive: true, force: true });
     }
 });
+
+type DelegatedRequest = {
+    messages: Array<{ content: Array<{ type: string; text?: string }> }>;
+    system: string;
+};
+
+function imageBlocks(count: number, prefix = 'sha256:fixture'): Array<Record<string, unknown>> {
+    return Array.from({ length: count }, (_, index) => ({
+        type: 'image',
+        attachment: {
+            attachmentId: `${prefix}-${index}`,
+            mediaType: 'image/png',
+            bytes: IMAGE.byteLength,
+        },
+    }));
+}
+
+function textMessage(role: 'user' | 'assistant', blocks: Array<Record<string, unknown>>): Record<string, unknown> {
+    return { role, source: { kind: role }, content: blocks };
+}
+
+function bridgedAttachments(): AttachmentStore {
+    return {
+        readImage: async (ref: unknown) => ({ data: IMAGE, ref }),
+        imageHostPath: () => 'C:/fixtures/img.png',
+    } as unknown as AttachmentStore;
+}
+
+async function collectDelegated(
+    adapter: ProviderVisionBridgeAdapter,
+    alias: string,
+    messages: Array<Record<string, unknown>>,
+    calls: Array<Record<string, unknown>>,
+): Promise<void> {
+    for await (const _chunk of adapter.stream({
+        provider: alias,
+        model: 'text-model',
+        system: 'base system',
+        messages,
+    } as never)) {
+        // consume the stream
+    }
+}
+
+test('more images than maxImages degrade to partial conversion instead of failing', async () => {
+    const cacheDir = await mkdtemp(join(tmpdir(), 'dsh-pv-overflow-'));
+    try {
+        const digest = createHash('sha256').update(IMAGE).digest('hex');
+        await writeFile(
+            join(cacheDir, buildVisionCacheKey(digest, 'normal')),
+            JSON.stringify({ text: 'cached local vision evidence' }),
+        );
+        const calls: Array<Record<string, unknown>> = [];
+        const alias = genericProviderId('other-provider');
+        const adapter = new ProviderVisionBridgeAdapter(
+            createRuntime(calls),
+            bridgedAttachments(),
+            new Map([[alias, 'other-provider']]),
+            { cacheDir, bypassCache: false, maxImages: 2, ocrBudget: 'auto' },
+        );
+
+        await collectDelegated(adapter, alias, [textMessage('user', [
+            { type: 'text', text: '看四张图' },
+            ...imageBlocks(4),
+        ])], calls);
+
+        assert.equal(calls.length, 1);
+        const delegated = calls[0] as unknown as DelegatedRequest;
+        assert.match(delegated.system, /===== 图片 1（/);
+        assert.match(delegated.system, /===== 图片 2（/);
+        assert.doesNotMatch(delegated.system, /===== 图片 3（/);
+        assert.match(delegated.system, /\[⚠️ 图片处理摘要\][\s\S]*未转换 2 张（图片编号 3、4/);
+        const texts = delegated.messages[0]!.content
+            .filter((block) => block.type === 'text')
+            .map((block) => block.text ?? '')
+            .join('\n');
+        assert.match(texts, /图片 1 已由 dsh-pseudo-vision 解析/);
+        assert.match(texts, /\[图片 3 未转换/);
+        assert.match(texts, /\[图片 4 未转换/);
+    } finally {
+        await rm(cacheDir, { recursive: true, force: true });
+    }
+});
+
+test('history-turn images degrade to compact evidence while current-turn images stay full', async () => {
+    const cacheDir = await mkdtemp(join(tmpdir(), 'dsh-pv-tiering-'));
+    try {
+        const digest = createHash('sha256').update(IMAGE).digest('hex');
+        await writeFile(
+            join(cacheDir, buildVisionCacheKey(digest, 'normal')),
+            JSON.stringify({ text: 'cached local vision evidence' }),
+        );
+        const calls: Array<Record<string, unknown>> = [];
+        const alias = genericProviderId('other-provider');
+        const adapter = new ProviderVisionBridgeAdapter(
+            createRuntime(calls),
+            bridgedAttachments(),
+            new Map([[alias, 'other-provider']]),
+            { cacheDir, bypassCache: false, maxImages: 8, fullEvidenceTurns: 1, ocrBudget: 'auto' },
+        );
+
+        await collectDelegated(adapter, alias, [
+            textMessage('user', [{ type: 'text', text: '第一轮' }, ...imageBlocks(1, 'sha256:old')]),
+            textMessage('assistant', [{ type: 'text', text: '好的' }]),
+            textMessage('user', [{ type: 'text', text: '第二轮' }, ...imageBlocks(1, 'sha256:new')]),
+        ], calls);
+
+        assert.equal(calls.length, 1);
+        const delegated = calls[0] as unknown as DelegatedRequest;
+        // 图片 1（历史）→ 紧凑：无 OCR 正文，有折叠指针行 + 回读路径。
+        assert.match(delegated.system, /===== 图片 1（image\/png·历史·紧凑）=====/);
+        assert.match(delegated.system, /\[OCR 已折叠\][\s\S]*vision_ocr\(file_path="C:\/fixtures\/img\.png"\)/);
+        // 图片 2（当前轮）→ 全量：缓存证据在。
+        assert.match(delegated.system, /===== 图片 2（image\/png）=====/);
+        assert.match(delegated.system, /cached local vision evidence/);
+        assert.match(delegated.system, /\[⚠️ 图片处理摘要\][\s\S]*全量证据 1 张[\s\S]*紧凑证据（历史轮次[^）]*）1 张/);
+        const firstTexts = delegated.messages[0]!.content
+            .filter((block) => block.type === 'text')
+            .map((block) => block.text ?? '')
+            .join('\n');
+        assert.match(firstTexts, /\[图片 1 为历史轮次图片/);
+    } finally {
+        await rm(cacheDir, { recursive: true, force: true });
+    }
+});
+
+test('total evidence budget keeps the first image and skips the overflow instead of failing', async () => {
+    const cacheDir = await mkdtemp(join(tmpdir(), 'dsh-pv-budget-'));
+    try {
+        const digest = createHash('sha256').update(IMAGE).digest('hex');
+        await writeFile(
+            join(cacheDir, buildVisionCacheKey(digest, 'normal')),
+            JSON.stringify({ text: 'x'.repeat(20_000) }),
+        );
+        const calls: Array<Record<string, unknown>> = [];
+        const alias = genericProviderId('other-provider');
+        const adapter = new ProviderVisionBridgeAdapter(
+            createRuntime(calls),
+            bridgedAttachments(),
+            new Map([[alias, 'other-provider']]),
+            { cacheDir, bypassCache: false, maxImages: 8, maxTotalEvidenceChars: 16_000, ocrBudget: 'auto' },
+        );
+
+        await collectDelegated(adapter, alias, [textMessage('user', [
+            { type: 'text', text: '两张大图' },
+            ...imageBlocks(2),
+        ])], calls);
+
+        assert.equal(calls.length, 1);
+        const delegated = calls[0] as unknown as DelegatedRequest;
+        assert.match(delegated.system, /===== 图片 1（/);
+        assert.doesNotMatch(delegated.system, /===== 图片 2（/);
+        assert.match(delegated.system, /未转换 1 张（图片编号 2/);
+    } finally {
+        await rm(cacheDir, { recursive: true, force: true });
+    }
+});

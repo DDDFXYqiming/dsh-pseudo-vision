@@ -29,53 +29,97 @@ function visitImages(
 
 /** Collect unique image attachment refs in request order. */
 export function collectImageRefs(messages: readonly Message[]): ImageAttachmentRef[] {
-    const refs: ImageAttachmentRef[] = [];
-    const seen = new Set<string>();
-    for (const message of messages) {
-        visitImages(message.content, (ref) => {
-            const id = String(ref.attachmentId);
-            if (seen.has(id)) return;
-            seen.add(id);
-            refs.push(ref);
-        });
-    }
-    return refs;
+    return collectImageRefsWithOrigin(messages).map((entry) => entry.ref);
 }
 
-/** Replace every image block with a short placeholder text. */
+/** One unique image with the message positions of its first/last appearance. */
+export interface ImageRefOrigin {
+    readonly ref: ImageAttachmentRef;
+    /** Message index of the first appearance; fixes the label numbering. */
+    readonly firstIndex: number;
+    /** Message index of the latest appearance; drives the full/compact tiering. */
+    readonly lastIndex: number;
+}
+
+/**
+ * Collect unique image refs together with their first/last message positions.
+ * An image re-attached in a later turn counts as current-turn (lastIndex), so
+ * it keeps full evidence even though its label stays at the first position.
+ */
+export function collectImageRefsWithOrigin(
+    messages: readonly Message[],
+): ImageRefOrigin[] {
+    const entries: ImageRefOrigin[] = [];
+    const indexById = new Map<string, number>();
+    for (let messageIndex = 0; messageIndex < messages.length; messageIndex += 1) {
+        const message = messages[messageIndex];
+        if (message === undefined) continue;
+        visitImages(message.content, (ref) => {
+            const id = String(ref.attachmentId);
+            const existing = indexById.get(id);
+            if (existing === undefined) {
+                indexById.set(id, entries.length);
+                entries.push({
+                    ref,
+                    firstIndex: messageIndex,
+                    lastIndex: messageIndex,
+                });
+                return;
+            }
+            const entry = entries[existing];
+            if (entry !== undefined) {
+                entries[existing] = { ...entry, lastIndex: messageIndex };
+            }
+        });
+    }
+    return entries;
+}
+
+/** Placeholder for an image whose full evidence is in this request. */
+export function parsedImagePlaceholder(label: number): string {
+    return `[图片 ${label} 已由 dsh-pseudo-vision 解析，观察数据位于本次请求的伪视觉上下文中]`;
+}
+
+/** Replace every image block with a per-label placeholder text. */
 function replaceImages(
     content: readonly ContentBlock[],
     labels: ReadonlyMap<string, number>,
+    placeholderFor: (label: number) => string,
 ): ContentBlock[] {
     return content.flatMap((block): ContentBlock[] => {
         if (block.type === "image") {
             const label = labels.get(String(block.attachment.attachmentId)) ?? 0;
             return [{
                 type: "text",
-                text: `[图片 ${label} 已由 dsh-pseudo-vision 解析，观察数据位于本次请求的伪视觉上下文中]`,
+                text: placeholderFor(label),
             }];
         }
         if (block.type === "tool-result") {
             return [{
                 ...block,
-                content: replaceImages(block.content, labels),
+                content: replaceImages(block.content, labels, placeholderFor),
             }];
         }
         return [block];
     });
 }
 
-/** Return request messages with image blocks replaced by placeholders. */
+/**
+ * Return request messages with image blocks replaced by placeholders. The
+ * bridge passes a generator distinguishing full / compact / skipped tiers;
+ * the default keeps the historical parsed wording.
+ */
 export function withoutImages(
     messages: readonly Message[],
     refs: readonly ImageAttachmentRef[],
+    placeholderFor: (label: number) => string = parsedImagePlaceholder,
 ): Message[] {
     const labels = new Map(
         refs.map((ref, index) => [String(ref.attachmentId), index + 1] as const),
     );
     return messages.map((message) => ({
         ...message,
-        content: replaceImages(message.content, labels),
+        content: replaceImages(message.content, labels, placeholderFor),
     }));
 }
 

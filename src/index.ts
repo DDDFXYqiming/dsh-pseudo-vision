@@ -85,8 +85,12 @@ export interface PseudoVisionConfig {
     cacheDir: string;
     /** Re-run the vision tools even when a cached conversion exists. */
     bypassCache?: boolean;
-    /** Maximum images converted per request. */
+    /** Maximum images converted per request (full tier; OCR-time guard). */
     maxImages?: number;
+    /** 单请求证据文本（全量+紧凑）总字符硬顶，默认 96000（≈24K tokens）。 */
+    maxTotalEvidenceChars?: number;
+    /** 最近多少个用户轮次的图片保留全量证据，更早自动降级紧凑，默认 2。 */
+    fullEvidenceTurns?: number;
     /** tesseract language pack (default "chi_sim+eng"). */
     langs?: string;
     /** OCR 分辨率预算：'auto' | 'small' | 'normal' | 'large' | 'mega'（缺省 auto，按图片大小自选）。 */
@@ -123,6 +127,8 @@ export const PseudoVisionConfigSchema: z<PseudoVisionConfig> = z.object({
     cacheDir: z.string().default(DEFAULT_CACHE_DIR),
     bypassCache: z.boolean().default(false),
     maxImages: z.number().step(1).min(1).max(32).default(8),
+    maxTotalEvidenceChars: z.number().step(1).min(16000).max(320000).default(96000),
+    fullEvidenceTurns: z.number().step(1).min(1).max(8).default(2),
     langs: z.string().default("chi_sim+eng"),
     ocrBudget: z.string().default("auto"),
     ocrNoResize: z.boolean().default(false),
@@ -144,6 +150,8 @@ function deepseekPart(config: PseudoVisionConfig): DeepSeekConfig {
         cacheDir: _cacheDir,
         bypassCache: _bypassCache,
         maxImages: _maxImages,
+        maxTotalEvidenceChars: _maxTotalEvidenceChars,
+        fullEvidenceTurns: _fullEvidenceTurns,
         langs: _langs,
         ocrBudget: _ocrBudget,
         ocrNoResize: _ocrNoResize,
@@ -165,6 +173,8 @@ export function apply(ctx: Context, config: PseudoVisionConfig): void {
     setEvidenceCharCap(config.evidenceMaxChars);
     const bypassCache = config.bypassCache ?? false;
     const maxImages = config.maxImages ?? 8;
+    const maxTotalEvidenceChars = config.maxTotalEvidenceChars ?? 96000;
+    const fullEvidenceTurns = config.fullEvidenceTurns ?? 2;
     const langs = config.langs ?? "chi_sim+eng";
     const ocrBudget = config.ocrBudget ?? "auto";
     const ocrNoResize = config.ocrNoResize ?? false;
@@ -220,6 +230,8 @@ export function apply(ctx: Context, config: PseudoVisionConfig): void {
         cacheDir,
         bypassCache,
         maxImages,
+        maxTotalEvidenceChars,
+        fullEvidenceTurns,
         ocrBudget,
         langs,
         ocrNoResize,
@@ -242,7 +254,7 @@ export function apply(ctx: Context, config: PseudoVisionConfig): void {
         ctx.llm,
         ctx.attachments,
         genericTargets,
-        { cacheDir, bypassCache, maxImages, ocrBudget, langs, ocrNoResize },
+        { cacheDir, bypassCache, maxImages, maxTotalEvidenceChars, fullEvidenceTurns, ocrBudget, langs, ocrNoResize },
     );
     let genericRegistration: AdapterRegistrationHandle | undefined;
     let genericRoutes: string[] = [];

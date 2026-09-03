@@ -9,6 +9,8 @@ Gives text-only providers in DeepSeek Harness a layer of "tool vision". Image at
 - The plugin takes over the `deepseek-official` route, which already handles images natively. Other text-only providers get sibling routes named `dsh-pseudo-vision/<provider>` through the `bridgeProviders` whitelist (shown as `· Pseudo Vision` in the model selector), or all at once via `bridgeOtherProviders`.
 - Sibling routes declare `inputModalities: ["text", "image"]`, which is what lets the request pass the host image-admission gate.
 - On LLM dispatch there are two paths. Native vision models pass through untouched. For text-only models, the plugin reads the attachment, runs the 4 local tools to turn the image into text, replaces the image block, injects `<pseudo-vision-context>`, then delegates to the original provider.
+- Evidence is tiered by turn. Images from the last `fullEvidenceTurns` (default 2) user turns get the full pipeline; older-turn images degrade automatically to **compact evidence** (metadata + colour + scan, no OCR) with a `vision_ocr(file_path=…)` re-fetch pointer, so the model can pull the text back on demand. Re-attaching an old image in a new message restores its full tier.
+- Two per-request guards: `maxImages` (default 8) bounds full-tier conversions, `maxTotalEvidenceChars` (default 96 000 characters, ≈24K tokens) bounds the combined evidence text. Over the limit nothing fails: unconverted images keep an explicit `[图片 N 未转换…]` placeholder and a `[⚠️ 图片处理摘要]` summary line tells the model exactly which images did not take effect.
 
 ## Tools exposed
 
@@ -62,8 +64,11 @@ It works out of the box, with no extra configuration. The `deepseek-official` ro
     bridgeProviders: ["kimi-for-coding"]   # only this provider gets a sibling route
     ocrBudget: auto                        # also small | normal | large | mega
     ocrNoResize: false                     # true: skip budget resize/upscale
-    evidenceMaxChars: 32000                # character cap on model-visible evidence text
+    evidenceMaxChars: 32000                # per-image character cap on model-visible evidence text
     # tessdataDir: "D:/tessdata"           # offline traineddata dir; wins over the PV_TESSDATA env fallback
+    maxImages: 8                           # full-tier image count cap per request (1-32)
+    maxTotalEvidenceChars: 96000           # combined evidence character cap (16000-320000)
+    fullEvidenceTurns: 2                   # recent user turns kept full; older degrade (1-8)
 ```
 
 You can also set `bridgeOtherProviders` to bridge every provider except the excluded list in one go. The tradeoff is one extra entry per model in the selector, so think before turning it on.
