@@ -32,7 +32,8 @@ import {
     type Config as DeepSeekConfig,
     type DeepSeekConnectionOptions,
 } from "@deepseek-ai/dsh-llm-deepseek";
-import { deepEqualJson, settingsNamespace } from "@deepseek-ai/dsh-settings";
+import { deepEqualJson } from "@deepseek-ai/dsh-util-values";
+import type {} from "@deepseek-ai/dsh-settings";
 import { defineTool } from "@deepseek-ai/dsh-tools";
 import z from "@deepseek-ai/schemastery";
 import { readImageFileSafe } from "./vision/file-guard.js";
@@ -78,7 +79,7 @@ export { disposeOcr } from "./vision/ocr.js";
 export { DEFAULT_IMAGE_PIXEL_BUDGET } from "./adapter.js";
 
 const PROVIDER = "deepseek-official";
-const DEEPSEEK_NS = settingsNamespace("llm-deepseek");
+const DEEPSEEK_NS = "llm-deepseek";
 
 export interface PseudoVisionConfig {
     /** Local cache directory for converted image text. */
@@ -224,6 +225,8 @@ export function apply(ctx: Context, config: PseudoVisionConfig): void {
         resolveApiKey,
         resolveUserId: () => getOrCreateAnonymousUserId(),
         resolveAttachments: () => ctx.get("attachments"),
+        prepareExtensions: (request) => ctx.get("deepseekLlmApiExtensions")?.prepare(request)
+            ?? Promise.resolve({ fields: {}, accept: async () => {} }),
     });
 
     const bridge = new PseudoVisionBridgeAdapter(deepseek, ctx.attachments, {

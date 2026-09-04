@@ -14,6 +14,8 @@
 
 ## 提供的工具
 
+v0.6.1 适配 DSH `0.1.2-rc.1`：使用独立 `dsh-util-values` 导出，并接入新版 DeepSeek API 扩展准备接口。桥接仍仅作用于非原生多模态模型，Windows / Linux 均使用本地 OCR 生成文本证据。
+
 | 工具 | 作用 | 实现 |
 |---|---|---|
 | `vision_ocr` | 提取图中所有文字（带归一化坐标） | tesseract.js（chi_sim + eng），管线见下 |
