@@ -65,7 +65,7 @@ All notable changes to dsh-pseudo-vision are documented here.
 
 ### Verification
 - `pnpm typecheck` and `pnpm test` pass (19/19).
-- Headless CLI comparison against `C:\Users\39795\Pictures\Screenshots` on `deepseek-official` / `deepseek-v4-flash` showed improved layout inference (colour bands and separators detected without requiring the model to run a second manual scan).
+  - Headless CLI comparison on a local screenshot test set showed improved layout inference, including colour bands and separators without a second manual scan.
 
 ## [0.4.0] - 2026-08-21
 
