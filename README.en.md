@@ -2,7 +2,7 @@
 
 # dsh-pseudo-vision
 
-Gives text-only providers in DeepSeek Harness a layer of "tool vision". Image attachments are broken down into **OCR text + color statistics + pixel scan + metadata** on the LLM dispatch path, so any text-only model can read an image through those words. Everything runs locally, **no external vision API**.
+Gives text-only providers in DeepSeek Harness a layer of "tool vision". Image attachments are broken down into **OCR text + color statistics + pixel scan + metadata** on the LLM dispatch path, so any text-only model can read an image through those words. Everything runs locally, with only local OCR and pixel statistics.
 
 ## What it does
 
@@ -10,7 +10,7 @@ Gives text-only providers in DeepSeek Harness a layer of "tool vision". Image at
 - Sibling routes declare `inputModalities: ["text", "image"]`, which is what lets the request pass the host image-admission gate.
 - On LLM dispatch there are two paths. Native vision models pass through untouched. For text-only models, the plugin reads the attachment, runs the 4 local tools to turn the image into text, replaces the image block, injects `<pseudo-vision-context>`, then delegates to the original provider.
 - Evidence is tiered by turn. Images from the last `fullEvidenceTurns` (default 2) user turns get the full pipeline; older-turn images degrade automatically to **compact evidence** (metadata + colour + scan, no OCR) with a `vision_ocr(file_path=…)` re-fetch pointer, so the model can pull the text back on demand. Re-attaching an old image in a new message restores its full tier.
-- Two per-request guards: `maxImages` (default 8) bounds full-tier conversions, `maxTotalEvidenceChars` (default 96 000 characters, ≈24K tokens) bounds the combined evidence text. Over the limit nothing fails: unconverted images keep an explicit `[图片 N 未转换…]` placeholder and a `[⚠️ 图片处理摘要]` summary line tells the model exactly which images did not take effect.
+- Two per-request guards: `maxImages` (default 8) bounds full-tier conversions, `maxTotalEvidenceChars` (default 96 000 characters, ≈24K tokens) bounds the combined evidence text. Over the limit the plugin degrades instead: unconverted images keep an explicit `[图片 N 未转换…]` placeholder and a `[⚠️ 图片处理摘要]` summary line tells the model exactly which images did not take effect.
 
 ## Tools exposed
 
@@ -29,7 +29,7 @@ Gives text-only providers in DeepSeek Harness a layer of "tool vision". Image at
 4. **CJK post-process** merges inter-character spaces (`通 知` → `通知`) and strips leading icon symbols.
 5. **Digit verification** re-reads IP/URL/port/long-number tokens with an ASCII whitelist in single-line mode. Punctuation keeps the first-pass skeleton, and only same-length re-reads with a confidence gain ≥5 are accepted; the `[数字复核 N 处]` audit block records each fix.
 
-> Verified on a real settings-page screenshot. OCR used to return only 3 top lines with all menu text lost; after the fix it returns 11 lines, with "通用设置/模型/通知" fully clean. The key fix was passing the tesseract.js PSM argument as a Number (the string `"3"` breaks full-page detection).
+> The key point in the OCR pipeline is that the tesseract.js PSM argument must be a Number; the string `"3"` breaks full-page detection.
 
 ## Install
 
@@ -56,7 +56,7 @@ Treat this approval as "let this package run code on your machine at install tim
 
 ## Usage
 
-It works out of the box, with no extra configuration. The `deepseek-official` route keeps handling images natively. Other providers get no sibling route by default, so opt in explicitly.
+It works out of the box with the default configuration. The `deepseek-official` route keeps handling images natively. Other providers get no sibling route by default, so opt in explicitly.
 
 ```yaml
 - id: dsh-pseudo-vision
