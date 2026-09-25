@@ -51,7 +51,7 @@ GitHub 安装会触发 `prepare` 脚本从源码构建 `lib/`。pnpm ≥10 首�
 
 ```yaml
 allowBuilds:
-  dsh-pseudo-vision: true
+  '@dsh-external/dsh-pseudo-vision': true
 ```
 
 请把这项授权视为「允许该包代码在安装时于你的机器上执行」；担心后续推送改变构建内容时，锁定 commit（`github:DDDFXYqiming/dsh-pseudo-vision#<sha>`）。

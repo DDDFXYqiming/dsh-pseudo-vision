@@ -1,8 +1,8 @@
 # Changelog
 
-All notable changes to dsh-pseudo-vision are documented here.
+All notable changes to `@dsh-external/dsh-pseudo-vision` are documented here.
 
-## [Unreleased]
+## [0.7.0] - 2026-09-25
 
 ### Added
 - 新配置字段 `tessdataDir`（离线 traineddata 目录，优先于 `PV_TESSDATA` 环境变量）与 `evidenceMaxChars`（模型证据文本封顶，默认 32000）；`cacheDir` 默认值移入 schema（原代码内回退删除）。
@@ -10,6 +10,9 @@ All notable changes to dsh-pseudo-vision are documented here.
 ### Fixed
 - **git 安装合规（publish 文档）**：新增自包含 `prepare` 脚本（`tsdown`），`github:` 安装在 pnpm ≥10 授权（profile `allowBuilds`）后即可拿到构建好的 `lib/`；README 双语补充授权说明。
 - **工具契约合规（tool 文档）**：删除本地 `defineTool` identity 桩与松散的 `Context.tools` 声明合并，改为 import 官方 `@deepseek-ai/dsh-tools` 的 `defineTool`——四个 `vision_*` 工具恢复模型参数的运行期校验（validateArgs），`parameters`/`output.schema` 改用官方属性映射 DSL。
+
+### Changed
+- 包名对齐 DeepSeek Harness 社区插件命名约定，`dsh-pseudo-vision` 更名为 `@dsh-external/dsh-pseudo-vision`，bundle patch 的 `name` 与 `allowBuilds` 授权键同步更新。条目 id 保持 `dsh-pseudo-vision`，路由前缀与配置字段名不变。
 
 ### Removed
 - Removed the browser client bundle and its Settings → Plugins configuration card. The plugin has no interactive settings, remains visible in the installed-plugin inventory, and keeps provider allowlists in configuration files.

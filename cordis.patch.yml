@@ -2,4 +2,4 @@
   disabled: true
 - insert:
     - id: dsh-pseudo-vision
-      name: "dsh-pseudo-vision"
+      name: "@dsh-external/dsh-pseudo-vision"

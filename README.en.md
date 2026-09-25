@@ -49,7 +49,7 @@ The GitHub route triggers the `prepare` script, which builds `lib/` from source.
 
 ```yaml
 allowBuilds:
-  dsh-pseudo-vision: true
+  '@dsh-external/dsh-pseudo-vision': true
 ```
 
 Treat this approval as "let this package run code on your machine at install time". Pin a commit (`github:DDDFXYqiming/dsh-pseudo-vision#<sha>`) if you want later pushes to stop changing what gets built.
