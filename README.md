@@ -1,80 +1,82 @@
-[简体中文](README.zh.md) | English
+简体中文 | [English](README.en.md)
 
 # dsh-pseudo-vision
 
-Gives text-only providers in DeepSeek Harness a layer of "tool vision". Image attachments are broken down into **OCR text + color statistics + pixel scan + metadata** on the LLM dispatch path, so any text-only model can read an image through those words. Everything runs locally, with only local OCR and pixel statistics.
+**面向 DeepSeek Harness (DSH) 纯文本模型的本地工具层视觉扩展**。
 
-## What it does
+本插件为 DeepSeek Harness 平台中缺乏原生视觉能力的纯文本服务商（如 DeepSeek 纯文本通道、Kimi 代码模型等）提供无缝的“工具层视觉”。在 LLM 分发（Dispatch）前，它将图片附件自动解构为 **OCR 文本（含归一化坐标与数字二次复核） + 9 桶颜色统计 + 矩阵像素扫描 + 空间几何元信息**，全程纯本地计算，零外部视觉 API 依赖。
 
-- The plugin takes over the `deepseek-official` route, which already handles images natively. Other text-only providers get sibling routes named `dsh-pseudo-vision/<provider>` through the `bridgeProviders` whitelist (shown as `· Pseudo Vision` in the model selector), or all at once via `bridgeOtherProviders`.
-- Sibling routes declare `inputModalities: ["text", "image"]`, which is what lets the request pass the host image-admission gate.
-- On LLM dispatch there are two paths. Native vision models pass through untouched. For text-only models, the plugin reads the attachment, runs the 4 local tools to turn the image into text, replaces the image block, injects `<pseudo-vision-context>`, then delegates to the original provider.
-- Evidence is tiered by turn. Images from the last `fullEvidenceTurns` (default 2) user turns get the full pipeline; older-turn images degrade automatically to **compact evidence** (metadata + colour + scan, no OCR) with a `vision_ocr(file_path=…)` re-fetch pointer, so the model can pull the text back on demand. Re-attaching an old image in a new message restores its full tier.
-- Two per-request guards: `maxImages` (default 8) bounds full-tier conversions, `maxTotalEvidenceChars` (default 96 000 characters, ≈24K tokens) bounds the combined evidence text. Over the limit the plugin degrades instead: unconverted images keep an explicit `[图片 N 未转换…]` placeholder and a `[⚠️ 图片处理摘要]` summary line tells the model exactly which images did not take effect.
+---
 
-## Tools exposed
+## 核心特性
 
-| Tool | Purpose | Implementation |
-|---|---|---|
-| `vision_ocr` | Extract every text line (with normalized coordinates) | tesseract.js (chi_sim + eng), pipeline below |
-| `vision_color_stats` | 9-bucket pixel share + average luminance | sharp + histogram |
-| `vision_pixel_scan` | Row + column multi-bucket scan emitting focusY/focusX | sharp raw pixel access |
-| `vision_meta` | Dimensions, format, color space, 4-corner + center samples | sharp metadata |
+* **突破模态准入限制**：通过为纯文本服务商动态派生 `dsh-pseudo-vision/<provider>` 兄弟路由，显式声明 `inputModalities: ["text", "image"]`，让纯文本模型顺利接收图片输入。
+* **原生多模态自动放行**：对原生支持视觉的模型（如原生多模态版本）完全透明穿透，仅对纯文本通道执行本地伪视觉解构，杜绝负优化。
+* **高可靠本地多维解构管线**：
+  * **v5 OCR 增强管线**：基于 `tesseract.js`，包含网格吸附预缩放、深色模式自适应、椒盐噪声定向过滤、低置信度局部 3× Lanczos 放大重测，以及 IP/端口/长数字的标点保持二次校验。
+  * **9 桶色彩空间分布**：统计黑白灰及六大主色调的像素占比与平均明度。
+  * **行列多色扫描（Pixel Scan）**：支持指定目标色彩探测与全局行列切片，感知界面区块与视觉重点。
+  * **物理元信息与采样**：提取图片尺寸、色彩空间及四角与中心点颜色采样。
+* **分层证据与字符预算保护**：
+  * **轮次动态降级**：最近 2 个用户轮次的图片保留全量证据，较早轮次自动降级为紧凑证据（保留元数据与色彩，省去 OCR 文本），并提供 `vision_ocr(file_path=...)` 按需拉取指针。
+  * **全局安全上限**：单次请求默认最多处理 8 张全量图片，总证据文本硬顶 96,000 字符（约 24K tokens），超限图片自动保留显式占位符并在末尾输出处理摘要，杜绝撑爆上下文。
 
-### OCR pipeline (v5)
+---
 
-1. **Preprocessing** resizes the image on a budget (small/normal/large/mega, snapped to a 28 grid), then detects dark mode (light themes are not inverted), converts to greyscale, and stretches contrast. Salt-pepper noise is detected next, and the 3×3 median denoise runs only when noise is present; clean images skip it so 1px thin strokes are not erased. A light sharpen (σ0.3) and a white border finish the step.
-2. **First pass** runs full-page tesseract recognition and emits every text line with per-line confidence; non-text blocks (image/separator) are filtered out.
-3. **Low-confidence retry** covers up to 8 regions, with text-like lines ranked first so icon noise lines no longer exhaust the budget. Each region is cropped, upscaled 3× with Lanczos, and re-read in single-block mode (PSM 6). A re-read replaces the main line only when its confidence is higher (the evidence block is still emitted).
-4. **CJK post-process** merges inter-character spaces (`通 知` → `通知`) and strips leading icon symbols.
-5. **Digit verification** re-reads IP/URL/port/long-number tokens with an ASCII whitelist in single-line mode. Punctuation keeps the first-pass skeleton, and only same-length re-reads with a confidence gain ≥5 are accepted; the `[数字复核 N 处]` audit block records each fix.
+## 暴露的原子工具
 
-> The key point in the OCR pipeline is that the tesseract.js PSM argument must be a Number; the string `"3"` breaks full-page detection.
+模型除了接收自动注入的证据外，还可按需自主调用以下 4 个原子工具：
 
-## Install
+| 工具名称 | 功能描述 | 底层实现 |
+| :--- | :--- | :--- |
+| `vision_ocr` | 提取文字与归一化坐标，支持数字及关键凭证二次复核 | `tesseract.js` (chi_sim + eng) |
+| `vision_color_stats` | 统计 9 类颜色桶像素占比与平均亮度 | `sharp` 像素直方图 |
+| `vision_pixel_scan` | 对指定颜色或非背景像素执行行列穿透扫描 | `sharp` Raw Pixel Buffer |
+| `vision_meta` | 读取分辨率、格式、色彩空间及中心/四角采样色 | `sharp.metadata()` |
 
-The GitHub route is the recommended one, assuming network access. When schannel or pnpm blockers hit on Windows, fall back to a local path.
+---
+
+## 安装与快速上手
+
+### 通过 DSH 插件系统安装（推荐）
 
 ```bash
-# GitHub (recommended)
 dsh plugin --profile web add github:DDDFXYqiming/dsh-pseudo-vision
+```
 
-# Local path when schannel / pnpm blockers hit on Windows
+### 本地源码安装
+
+```bash
 git clone https://github.com/DDDFXYqiming/dsh-pseudo-vision.git
 cd dsh-pseudo-vision && pnpm install && pnpm build
-dsh plugin --profile web add <local absolute path>
+dsh plugin --profile web add .
 ```
 
-The GitHub route triggers the `prepare` script, which builds `lib/` from source. On the first `add`, pnpm >= 10 refuses to run build scripts of git dependencies: copy the exact package key pnpm prints into the profile's `pnpm-workspace.yaml`, then re-run `add`:
+*若使用 pnpm 10+ 遇到构建拦截，请在 Profile 对应的 `pnpm-workspace.yaml` 中为 `@dsh-external/dsh-pseudo-vision` 配置 `allowBuilds: true`。*
 
-```yaml
-allowBuilds:
-  '@dsh-external/dsh-pseudo-vision': true
-```
+---
 
-Treat this approval as "let this package run code on your machine at install time". Pin a commit (`github:DDDFXYqiming/dsh-pseudo-vision#<sha>`) if you want later pushes to stop changing what gets built.
+## 配置指南
 
-## Usage
-
-It works out of the box with the default configuration. The `deepseek-official` route keeps handling images natively. Other providers get no sibling route by default, so opt in explicitly.
+在对应 Profile 的 `cordis.patch.yml` 中配置桥接策略：
 
 ```yaml
 - id: dsh-pseudo-vision
   config:
-    bridgeProviders: ["kimi-for-coding"]   # only this provider gets a sibling route
-    ocrBudget: auto                        # also small | normal | large | mega
-    ocrNoResize: false                     # true: skip budget resize/upscale
-    evidenceMaxChars: 32000                # per-image character cap on model-visible evidence text
-    # tessdataDir: "D:/tessdata"           # offline traineddata dir; wins over the PV_TESSDATA env fallback
-    maxImages: 8                           # full-tier image count cap per request (1-32)
-    maxTotalEvidenceChars: 96000           # combined evidence character cap (16000-320000)
-    fullEvidenceTurns: 2                   # recent user turns kept full; older degrade (1-8)
+    bridgeProviders: ["kimi-for-coding"]   # 针对指定纯文本服务商派生兄弟路由
+    # bridgeOtherProviders: true           # 可选：一键桥接除排除列表外的所有服务商
+    ocrBudget: auto                        # 预处理分辨率预算: auto | small | normal | large | mega
+    ocrNoResize: false                     # 是否跳过预算缩放
+    maxImages: 8                           # 单次请求全量转换的图片数量上限 (1-32)
+    maxTotalEvidenceChars: 96000           # 证据文本总字符上限 (约 24K tokens)
+    fullEvidenceTurns: 2                   # 保留全量证据的用户轮次深度 (1-8)
+    evidenceMaxChars: 32000                # 单张图片可见证据的字符上限
 ```
 
-You can also set `bridgeOtherProviders` to bridge every provider except the excluded list in one go. The tradeoff is one extra entry per model in the selector, so think before turning it on.
+配置完成后，模型选择器中将呈现带 `· Pseudo Vision` 标记的可用模型通道。
 
-```yaml
-    bridgeOtherProviders: true
-```
+---
 
-Once configured, sibling routes show up as `dsh-pseudo-vision/<provider>` (`· Pseudo Vision`). Text-only models go through the local pseudo-vision conversion, while native vision models stay untouched.
+## 许可证
+
+本项目基于 [MIT License](LICENSE) 开源。
