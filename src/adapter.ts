@@ -100,17 +100,6 @@ const DEFAULT_FULL_EVIDENCE_TURNS = 2;
 
 type EvidenceTier = "full" | "compact" | "skipped";
 
-/**
- * Budgeted, tiered request transformation. Images of the recent user turns
- * (`fullEvidenceTurns`, default 2) get the full local evidence pipeline, each
- * image capped at MAX_EVIDENCE_CHARS and the whole request additionally
- * capped at `maxTotalEvidenceChars`. Older-turn images are never dropped:
- * they degrade to compact evidence (metadata + colour + scan, OCR folded to a
- * re-fetch pointer). Only images beyond the count/budget caps are skipped,
- * and every skipped image keeps an explicit placeholder plus a summary line,
- * so nothing disappears silently. The request never fails because too many
- * images were attached.
- */
 export async function buildPseudoVisionRequest(
     options: GenerateOptions,
     attachments: AttachmentStore,
@@ -144,7 +133,6 @@ export async function buildPseudoVisionRequest(
     let usedChars = 0;
     let fullCount = 0;
 
-    // Pass 1: current-turn images → full evidence (count + budget capped).
     for (let index = 0; index < entries.length; index += 1) {
         const label = index + 1;
         const entry = entries[index];
@@ -304,15 +292,6 @@ export class PseudoVisionBridgeAdapter extends LlmAdapter {
         };
     }
 
-    /**
-     * [v0.5.2] dsh 0.1.1-rc.2 宿主在 adapterStream 中无条件调用 `adapter.prepareCall`；
-     * 抽象基类 `LlmAdapter` 不提供默认实现，未重写即抛 "is not a function"。
-     * 这里**不委托**被包装的 DeepSeek adapter（其 `prepareCall` 在 dsh 的
-     * 嵌套模块解析下可能取到旧版的实例而缺失该方法），而是自取 `this.resolveModel`
-     * 拿到带 image modalities 的元数据，dispatch 用 bridge 自己的 `this.stream()`
-     * （已含伪视觉变换）——这是把 prepareCall 退化为"解析 + dispatch 闭包"的最小
-     * 契约实现，对宿主完全透明。
-     */
     async prepareCall(
         provider: string,
         model: string,
